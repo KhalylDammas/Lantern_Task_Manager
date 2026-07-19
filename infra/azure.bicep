@@ -177,10 +177,13 @@ resource webApp 'Microsoft.Web/sites@2021-02-01' = {
   location: location
   name: webAppName
   properties: {
+    httpsOnly: true
     serverFarmId: serverfarm.id
     keyVaultReferenceIdentity: identity.id
     siteConfig: {
       alwaysOn: false
+      minTlsVersion: '1.2'
+      scmMinTlsVersion: '1.2'
       appCommandLine: 'python app.py'
       linuxFxVersion: pythonVersion
       appSettings: [
@@ -232,7 +235,7 @@ resource webApp 'Microsoft.Web/sites@2021-02-01' = {
         }
         { name: 'KEY_VAULT_URI', value: kv.properties.vaultUri }
       ]
-      ftpsState: 'FtpsOnly'
+      ftpsState: 'Disabled'
     }
   }
   identity: {

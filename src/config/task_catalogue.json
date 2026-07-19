@@ -1,5 +1,5 @@
 {
-  "version": "1",
+  "version": 1,
   "task_types": [
     {
       "id": "lc_opening",

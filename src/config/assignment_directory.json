@@ -48,6 +48,18 @@
       "department_code": "PROC",
       "active": true,
       "manager_entra_id": "e5e8ca79-f97b-4487-b3a7-49068a62ee18"
+    },
+    "40c37df1-8c87-4bb5-ba8a-da4ba3689fb3": {
+      "display_name": "Abdulrazak Mohamed Ali",
+      "department_code": "IT",
+      "active": true,
+      "manager_entra_id": "d5b03abf-9013-49af-b7ee-890567cc792d"
+    },
+    "df2ffbaf-d967-4ac6-bf2f-eec78571d73b": {
+      "display_name": "Rizwan Sultan",
+      "department_code": "FIN",
+      "active": true,
+      "manager_entra_id": "5f158a0b-3daa-4b3a-a66e-cb77dcfe7e07"
     }
   }
 }

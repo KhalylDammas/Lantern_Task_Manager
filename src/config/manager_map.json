@@ -1,8 +1,6 @@
 {
-  "version": "1",
-  "notes": "Map assignee Entra object id to verifier (manager). Populate with real GUIDs.",
-  "managers_by_assignee_entra_id": {
-    "00000000-0000-0000-0000-000000000000": "00000000-0000-0000-0000-000000000001"
-  },
+  "version": 1,
+  "notes": "Optional assignee-to-verifier overrides. Production currently uses LTM_VERIFIER_MODE=created_by; add only verified Entra object IDs before enabling manager_map mode.",
+  "managers_by_assignee_entra_id": {},
   "displays": {}
 }
