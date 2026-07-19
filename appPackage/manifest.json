@@ -10,8 +10,8 @@
         "termsOfUseUrl": "https://${{BOT_DOMAIN}}/terms"
     },
     "icons": {
-        "color": "color.png",
-        "outline": "outline.png"
+        "color": "${{ICON_COLOR}}",
+        "outline": "${{ICON_OUTLINE}}"
     },
     "name": {
         "short": "Lantern Task Manager ${{APP_NAME_SUFFIX}}",
