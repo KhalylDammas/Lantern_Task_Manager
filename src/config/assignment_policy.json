@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "allow_ceo_to_direct_reports": true,
+  "ceo_department_codes": ["CEO"],
+  "defaults": {
+    "allow_same_department": true,
+    "allow_cross_department": false
+  },
+  "edges": [
+    {
+      "from": { "department_code": "PROC" },
+      "to": { "department_code": "FIN" },
+      "bidirectional": true
+    },
+    {
+      "from": { "department_code": "FIN" },
+      "to": { "department_code": "IT" },
+      "bidirectional": false
+    }
+  ],
+  "deny_edges": []
+}

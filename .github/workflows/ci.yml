@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ODBC for SQL-related tests (optional)
+        run: |
+          sudo apt-get update && sudo ACCEPT_EULA=Y sudo apt-get install -y unixodbc msodbcsql18 || true
+
+      - name: Install dependencies and run tests
+        env:
+          PYTHONPATH: src
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r src/requirements.txt
+          pytest tests/ -q --tb=no -x || pytest tests/ -q --tb=short

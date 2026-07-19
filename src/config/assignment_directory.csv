@@ -1,0 +1,9 @@
+include,entra_object_id,display_name,mail,job_title,graph_department,department_code,employee_code,manager_entra_id,manager_display_name,active,notes
+Y,0e103a6b-8bf3-4afd-9236-64cca3052719,Khalyl Ibraheem Alghamdi,khalyli@lanternsystems.com,AI Engineer,IT,IT,,d5b03abf-9013-49af-b7ee-890567cc792d,Jabir Hameed,Y,LTM developer / pilot
+Y,d5b03abf-9013-49af-b7ee-890567cc792d,Jabir Hameed,jabirs@lanternsystems.com,CEO,,CEO,,,,Y,CEO — may assign to direct reports per assignment_policy.json
+Y,c04485ea-26b6-404e-b552-dff9dc767eaa,Abdulkhaliq Abdullah,abdulkhaliqa@lanternsystems.com,Enterprise Applications Specialist,IT,IT,,5f158a0b-3daa-4b3a-a66e-cb77dcfe7e07,Imran Akram Butta,Y,Graph department=IT
+Y,caf84ef3-a207-4931-a978-0f9bb0858ad9,Ghadeer S Alhabeeb,ghadeers@lanternsystems.com,IT Administrator ,IT,IT,,40c37df1-8c87-4bb5-ba8a-da4ba3689fb3,Abdulrazak Mohamed Ali,Y,Graph department=IT
+Y,5f158a0b-3daa-4b3a-a66e-cb77dcfe7e07,Imran Akram Butta,imranb@lanternsystems.com,,,FIN,,d5b03abf-9013-49af-b7ee-890567cc792d,Jabir Hameed,Y,Graph department not specified or URL was not correct
+Y,fd121511-c6a6-4064-bc7c-aa5efd9326eb,Layla Alyousuf,laylay@lanternsystems.com,,,FIN,,5f158a0b-3daa-4b3a-a66e-cb77dcfe7e07,Imran Akram Butta,Y,
+Y,e5e8ca79-f97b-4487-b3a7-49068a62ee18,Hafiz Sarwar,hafizs@lanternsystems.com,,,PROC,,d5b03abf-9013-49af-b7ee-890567cc792d,Jabir Hameed,Y,
+Y,cc99a627-c1a1-46dc-8518-3661981227b5,Muhammed Shaji,shajim@lanternsystems.com,,,PROC,,e5e8ca79-f97b-4487-b3a7-49068a62ee18,Hafiz Sarwar,Y,

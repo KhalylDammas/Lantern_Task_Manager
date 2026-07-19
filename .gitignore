@@ -1,0 +1,32 @@
+# TeamsFx / Microsoft 365 Agents Toolkit (see official sample .gitignore)
+# https://github.com/OfficeDev/microsoft-365-agents-toolkit-samples
+# Environment files are private by default. Only the reviewed, non-secret dev
+# template and explicit example are versioned.
+env/.env.*
+!env/.env.dev
+!env/.env.dev.example
+.localConfigs
+.env
+appPackage/build
+
+# python virtual environment
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.python-version
+
+# others
+.deployment/
+node_modules/
+devTools/*.log
+
+# Dev tool directories
+/devTools/
+
+# LTM runtime (not managed by Toolkit — auto-created on first DB use)
+src/ltm_local.db
+.ltm/
+
+# Regenerable Entra export for directory seeding (see scripts/seed_assignment_directory.py)
+src/config/assignment_directory.candidates.csv

@@ -1,0 +1,62 @@
+{
+    "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.26/MicrosoftTeams.schema.json",
+    "manifestVersion": "1.26",
+    "version": "1.0.0",
+    "id": "${{TEAMS_APP_ID}}",
+    "developer": {
+        "name": "Lantern Systems",
+        "websiteUrl": "https://${{BOT_DOMAIN}}/",
+        "privacyUrl": "https://${{BOT_DOMAIN}}/privacy",
+        "termsOfUseUrl": "https://${{BOT_DOMAIN}}/terms"
+    },
+    "icons": {
+        "color": "color.png",
+        "outline": "outline.png"
+    },
+    "name": {
+        "short": "Lantern Task Manager ${{APP_NAME_SUFFIX}}",
+        "full": "Lantern Task Manager (LTM) for Microsoft Teams"
+    },
+    "description": {
+        "short": "Create, assign, verify, and track tasks with D365 context.",
+        "full": "Lantern Task Manager (LTM): natural-language tasking, Adaptive Cards, manager verification workflow, overdue escalation timers, and read-only Dynamics 365 lookups behind a guarded façade."
+    },
+    "accentColor": "#4F46E5",
+    "supportsChannelFeatures": "tier1",
+    "bots": [
+        {
+            "botId": "${{BOT_ID}}",
+            "scopes": ["team", "groupChat", "personal"],
+            "supportsFiles": false,
+            "isNotificationOnly": false,
+            "commandLists": [
+                {
+                    "scopes": ["personal", "team", "groupChat"],
+                    "commands": [
+                        {
+                            "title": "help",
+                            "description": "Show LTM shortcuts and slash commands."
+                        },
+                        {
+                            "title": "my tasks",
+                            "description": "List tasks assigned to me."
+                        },
+                        {
+                            "title": "create task form",
+                            "description": "Open the structured Adaptive Card capture form."
+                        },
+                        {
+                            "title": "list pending verification",
+                            "description": "Show tasks awaiting manager verification (when permitted)."
+                        }
+                    ]
+                }
+            ]
+        }
+    ],
+    "composeExtensions": [],
+    "configurableTabs": [],
+    "staticTabs": [],
+    "permissions": ["identity", "messageTeamMembers"],
+    "validDomains": ["${{BOT_DOMAIN}}"]
+}

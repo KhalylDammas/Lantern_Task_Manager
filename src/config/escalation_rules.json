@@ -1,0 +1,8 @@
+{
+  "version": "1",
+  "timezone_note": "Use UTC in cron; tune per business TZ in ops runbooks.",
+  "daily_summary_cron": "0 7 * * *",
+  "overdue_scan_cron": "0 0 7 * * *",
+  "overdue_threshold_days": 1,
+  "escalation_chain": ["manager", "dept_head", "ceo_delegate"]
+}

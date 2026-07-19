@@ -1,0 +1,84 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "resourceBaseName": {
+      "value": "ltm${{RESOURCE_SUFFIX}}"
+    },
+    "openaiKey": {
+      "value": "${{SECRET_OPENAI_API_KEY}}"
+    },
+    "groqKey": {
+      "value": "${{SECRET_GROQ_API_KEY}}"
+    },
+    "tursoDatabaseUrl": {
+      "value": "${{SECRET_TURSO_DATABASE_URL}}"
+    },
+    "tursoAuthToken": {
+      "value": "${{SECRET_TURSO_AUTH_TOKEN}}"
+    },
+    "botClientId": {
+      "value": "${{BOT_ID}}"
+    },
+    "botTenantId": {
+      "value": "${{TEAMS_APP_TENANT_ID}}"
+    },
+    "botClientSecret": {
+      "value": "${{SECRET_BOT_PASSWORD}}"
+    },
+    "botAppType": {
+      "value": "SingleTenant"
+    },
+    "llmPrimary": {
+      "value": "${{LLM_PRIMARY}}"
+    },
+    "llmToolProfile": {
+      "value": "${{LLM_TOOL_PROFILE}}"
+    },
+    "groqModel": {
+      "value": "${{GROQ_MODEL}}"
+    },
+    "groqFallbackModel": {
+      "value": "${{GROQ_FALLBACK_MODEL}}"
+    },
+    "teamsAppId": {
+      "value": "${{TEAMS_APP_ID}}"
+    },
+    "notificationActivityEnabled": {
+      "value": "${{NOTIFICATION_ACTIVITY_ENABLED}}"
+    },
+    "notificationBotDmEnabled": {
+      "value": "${{NOTIFICATION_BOT_DM_ENABLED}}"
+    },
+    "verifierMode": {
+      "value": "${{LTM_VERIFIER_MODE}}"
+    },
+    "d365EnvironmentUrl": {
+      "value": "${{D365_ENVIRONMENT_URL}}"
+    },
+    "d365ClientId": {
+      "value": "${{D365_CLIENT_ID}}"
+    },
+    "d365TenantId": {
+      "value": "${{D365_TENANT_ID}}"
+    },
+    "d365DataAreaId": {
+      "value": "${{D365_DATA_AREA_ID}}"
+    },
+    "d365ClientSecret": {
+      "value": "${{SECRET_D365_CLIENT_SECRET}}"
+    },
+    "cronSecret": {
+      "value": "${{SECRET_LTM_CRON_SECRET}}"
+    },
+    "webAppSKU": {
+      "value": "F1"
+    },
+    "botDisplayName": {
+      "value": "Lantern Task Manager"
+    },
+    "linuxFxVersion": {
+      "value": "PYTHON|3.12"
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "version": "1",
+  "task_types": [
+    {
+      "id": "lc_opening",
+      "display_name": "LC Opening",
+      "default_priority": "High",
+      "default_sla_days": 5,
+      "d365_refs": ["purchase_order_number", "vendor_account"]
+    },
+    {
+      "id": "vendor_onboarding",
+      "display_name": "Vendor onboarding",
+      "default_priority": "Medium",
+      "default_sla_days": 14,
+      "d365_refs": ["vendor_account"]
+    }
+  ]
+}

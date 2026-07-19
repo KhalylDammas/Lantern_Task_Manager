@@ -1,0 +1,8 @@
+{
+  "version": "1",
+  "notes": "Map assignee Entra object id to verifier (manager). Populate with real GUIDs.",
+  "managers_by_assignee_entra_id": {
+    "00000000-0000-0000-0000-000000000000": "00000000-0000-0000-0000-000000000001"
+  },
+  "displays": {}
+}

@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LTM Privacy Policy</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 42rem; margin: 2rem auto; padding: 0 1rem; color: #1f2937; line-height: 1.6; }
+    h1 { color: #4f46e5; }
+    a { color: #4f46e5; }
+  </style>
+</head>
+<body>
+  <h1>Privacy Policy — Lantern Task Manager</h1>
+  <p><strong>Audience:</strong> Lantern Systems employees using the internal LTM Teams bot.</p>
+  <h2>Data we process</h2>
+  <ul>
+    <li>Microsoft Entra ID identity (object ID, display name, email, department) from Teams sign-in</li>
+    <li>Task records you create or are assigned (descriptions, due dates, status, audit trail)</li>
+    <li>Chat messages sent to the bot to fulfill task-management requests</li>
+    <li>Optional read-only lookups from Dynamics 365 when you reference ERP entities</li>
+    <li>Operational telemetry (App Service logs, optional Application Insights)</li>
+  </ul>
+  <h2>How data is used</h2>
+  <p>
+    Data is used solely to operate task lifecycle workflows inside Lantern Systems: assignment,
+    reminders, verification, and reporting. LLM providers (Groq and/or OpenAI/Azure OpenAI) process
+    chat content to interpret requests; prompts are governed by internal redaction and policy settings.
+  </p>
+  <h2>Storage and retention</h2>
+  <p>
+    Task data is stored in Lantern-controlled cloud databases (Turso/SQL). Retention follows internal
+    IT policy. When a task is closed and verified, records remain for audit purposes unless removed
+    under a documented retention schedule.
+  </p>
+  <h2>Sharing</h2>
+  <p>
+    Data is not sold. It is shared only with Lantern Systems systems required to run the service
+    (Microsoft 365, Azure, approved LLM APIs, and read-only D365 OData). It is not published to the
+    public internet.
+  </p>
+  <h2>Your choices</h2>
+  <p>
+    Use of LTM is subject to company policy. For access or data questions, contact
+    <a href="mailto:it@lanternsystems.com">it@lanternsystems.com</a>.
+  </p>
+  <p><a href="/">Back to LTM home</a></p>
+</body>
+</html>

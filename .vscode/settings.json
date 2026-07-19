@@ -1,0 +1,16 @@
+{
+    "debug.onTaskErrors": "abort",
+    "json.schemas": [
+        {
+            "fileMatch": [
+                "/aad.*.json"
+            ],
+            "schema": {}
+        }
+    ],
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+    "python.terminal.activateEnvironment": false,
+    "terminal.integrated.env.linux": {
+        "PATH": "${env:PATH}:/home/khalyli/.nvm/versions/node/v24.18.0/bin"
+    }
+}

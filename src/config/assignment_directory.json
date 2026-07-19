@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "notes": "Generated from assignment_directory.csv. Edit CSV then run: python scripts/seed_assignment_directory.py build",
+  "employees": {
+    "0e103a6b-8bf3-4afd-9236-64cca3052719": {
+      "display_name": "Khalyl Ibraheem Alghamdi",
+      "department_code": "IT",
+      "active": true,
+      "manager_entra_id": "d5b03abf-9013-49af-b7ee-890567cc792d"
+    },
+    "d5b03abf-9013-49af-b7ee-890567cc792d": {
+      "display_name": "Jabir Hameed",
+      "department_code": "CEO",
+      "active": true
+    },
+    "c04485ea-26b6-404e-b552-dff9dc767eaa": {
+      "display_name": "Abdulkhaliq Abdullah",
+      "department_code": "IT",
+      "active": true,
+      "manager_entra_id": "5f158a0b-3daa-4b3a-a66e-cb77dcfe7e07"
+    },
+    "caf84ef3-a207-4931-a978-0f9bb0858ad9": {
+      "display_name": "Ghadeer S Alhabeeb",
+      "department_code": "IT",
+      "active": true,
+      "manager_entra_id": "40c37df1-8c87-4bb5-ba8a-da4ba3689fb3"
+    },
+    "5f158a0b-3daa-4b3a-a66e-cb77dcfe7e07": {
+      "display_name": "Imran Akram Butta",
+      "department_code": "FIN",
+      "active": true,
+      "manager_entra_id": "d5b03abf-9013-49af-b7ee-890567cc792d"
+    },
+    "fd121511-c6a6-4064-bc7c-aa5efd9326eb": {
+      "display_name": "Layla Alyousuf",
+      "department_code": "FIN",
+      "active": true,
+      "manager_entra_id": "5f158a0b-3daa-4b3a-a66e-cb77dcfe7e07"
+    },
+    "e5e8ca79-f97b-4487-b3a7-49068a62ee18": {
+      "display_name": "Hafiz Sarwar",
+      "department_code": "PROC",
+      "active": true,
+      "manager_entra_id": "d5b03abf-9013-49af-b7ee-890567cc792d"
+    },
+    "cc99a627-c1a1-46dc-8518-3661981227b5": {
+      "display_name": "Muhammed Shaji",
+      "department_code": "PROC",
+      "active": true,
+      "manager_entra_id": "e5e8ca79-f97b-4487-b3a7-49068a62ee18"
+    }
+  }
+}

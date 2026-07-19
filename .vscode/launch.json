@@ -1,0 +1,141 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Launch Remote (Edge)",
+      "type": "msedge",
+      "request": "launch",
+      "url": "https://teams.microsoft.com/l/app/${{TEAMS_APP_ID}}?installAppPackage=true&webjoin=true&${account-hint}",
+      "presentation": {
+        "group": "1-Teams",
+        "order": 4
+      },
+      "internalConsoleOptions": "neverOpen"
+    },
+    {
+      "name": "Launch Remote (Chrome)",
+      "type": "chrome",
+      "request": "launch",
+      "url": "https://teams.microsoft.com/l/app/${{TEAMS_APP_ID}}?installAppPackage=true&webjoin=true&${account-hint}",
+      "presentation": {
+        "group": "1-Teams",
+        "order": 5
+      },
+      "internalConsoleOptions": "neverOpen"
+    },
+    {
+      "name": "Launch Remote (Desktop)",
+      "type": "node",
+      "request": "launch",
+      "preLaunchTask": "Start Agent in Desktop Client (Remote)",
+      "presentation": {
+        "group": "1-Teams",
+        "order": 6
+      },
+      "internalConsoleOptions": "neverOpen"
+    },
+    {
+      "name": "Launch Agent (Edge)",
+      "type": "msedge",
+      "request": "launch",
+      "url": "https://teams.microsoft.com/l/app/${{local:TEAMS_APP_ID}}?installAppPackage=true&webjoin=true&${account-hint}",
+      "presentation": {
+        "group": "all",
+        "hidden": true
+      },
+      "internalConsoleOptions": "neverOpen"
+    },
+    {
+      "name": "Launch Agent (Chrome)",
+      "type": "chrome",
+      "request": "launch",
+      "url": "https://teams.microsoft.com/l/app/${{local:TEAMS_APP_ID}}?installAppPackage=true&webjoin=true&${account-hint}",
+      "presentation": {
+        "group": "all",
+        "hidden": true
+      },
+      "internalConsoleOptions": "neverOpen"
+    },
+    {
+      "name": "Start Python",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/app.py",
+      "cwd": "${workspaceFolder}/src",
+      "env": {
+        "TEAMSFX_ENV": "local",
+        "PYTHONUNBUFFERED": "1"
+      },
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Run Python (Playground)",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "${workspaceFolder}/.venv/bin/python ${workspaceFolder}/src/app.py",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "env": {
+        "TEAMSFX_ENV": "playground",
+        "PYTHONUNBUFFERED": "1"
+      }
+    },
+    {
+      "name": "Run Microsoft 365 Agents Playground",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "AGENT_HOST=$(ip -4 route get 1.1.1.1 | awk '{print $7; exit}'); until nc -z \"$AGENT_HOST\" 3978 >/dev/null 2>&1; do sleep 0.25; done; node ${workspaceFolder}/devTools/playground/node_modules/@microsoft/m365agentsplayground/cli.js start --app-endpoint \"http://$AGENT_HOST:3978/api/messages\" --port 56150",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "PATH": "${workspaceFolder}/devTools/nodejs:${env:PATH}"
+      }
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Debug in Teams (Edge)",
+      "configurations": ["Launch Agent (Edge)", "Start Python"],
+      "cascadeTerminateToConfigurations": ["Start Python"],
+      "preLaunchTask": "Start Agent Locally",
+      "presentation": {
+        "group": "1-Teams",
+        "order": 1
+      },
+      "stopAll": true
+    },
+    {
+      "name": "Debug in Teams (Chrome)",
+      "configurations": ["Launch Agent (Chrome)", "Start Python"],
+      "cascadeTerminateToConfigurations": ["Start Python"],
+      "preLaunchTask": "Start Agent Locally",
+      "presentation": {
+        "group": "1-Teams",
+        "order": 2
+      },
+      "stopAll": true
+    },
+    {
+      "name": "Debug in Teams (Desktop)",
+      "configurations": ["Start Python"],
+      "preLaunchTask": "Start Agent in Desktop Client",
+      "presentation": {
+        "group": "1-Teams",
+        "order": 3
+      },
+      "stopAll": true
+    },
+    {
+        "name": "Debug in Microsoft 365 Agents Playground",
+        "configurations": [
+          "Run Python (Playground)",
+          "Run Microsoft 365 Agents Playground"
+        ],
+        "preLaunchTask": "Deploy (Microsoft 365 Agents Playground)",
+        "presentation": {
+            "group": "0-TestTool",
+            "order": 1
+        },
+        "stopAll": true
+    }
+  ]
+}
