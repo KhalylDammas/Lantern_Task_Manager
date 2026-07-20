@@ -5,7 +5,7 @@ from datetime import date, timedelta
 
 import pytest
 
-from ltm.bot.context import set_turn_context
+from ltm.bot.context import drain_pending_cards, set_turn_context
 from ltm.bot.drafts import peek_draft, stash_draft, take_draft
 from ltm.bot.tools import GetTaskParams, get_task_handler
 from ltm.application.drafts import DraftUseCases
@@ -43,7 +43,8 @@ async def test_get_task_allows_participant_and_denies_unrelated_user() -> None:
     set_turn_context(conversation_id="c1", actor=UserRef(entra_object_id="creator"))
     allowed = json.loads(await get_task_handler(GetTaskParams(task_id=task_id)))
     assert allowed["ok"] is True
-    assert allowed["value"]["id"] == task_id
+    assert allowed["code"] == "TASK_FOUND"
+    assert len(drain_pending_cards()) == 1
 
     set_turn_context(conversation_id="c2", actor=UserRef(entra_object_id="stranger"))
     denied = json.loads(await get_task_handler(GetTaskParams(task_id=task_id)))
@@ -59,7 +60,8 @@ async def test_get_task_allows_configured_ceo_oversight() -> None:
     )
     result = json.loads(await get_task_handler(GetTaskParams(task_id=task_id)))
     assert result["ok"] is True
-    assert result["value"]["id"] == task_id
+    assert result["code"] == "TASK_FOUND"
+    assert len(drain_pending_cards()) == 1
 
 
 def test_drafts_are_one_time_use() -> None:

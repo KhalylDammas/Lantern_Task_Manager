@@ -26,6 +26,8 @@ from microsoft_teams.ai.function import FunctionHandler, FunctionHandlerWithNoPa
 from microsoft_teams.openai.function_utils import get_function_schema, parse_function_arguments
 from pydantic import BaseModel
 
+from ltm.bot.context import take_terminal_response
+
 logger = logging.getLogger(__name__)
 
 
@@ -104,6 +106,15 @@ class AnthropicTeamsAIModel(AIModel):
             for res in function_results:
                 await memory.push(res)
                 hist.append(res)
+            terminal = take_terminal_response()
+            if terminal is not None:
+                logger.info(
+                    "llm_terminal_response provider=anthropic model=%s external_call_skipped=1",
+                    self.model,
+                )
+                model_final = ModelMessage(content=terminal, function_calls=None)
+                await memory.push(model_final)
+                return model_final
             pending: Message | None = None
         else:
             pending = input

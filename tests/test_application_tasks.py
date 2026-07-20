@@ -63,7 +63,11 @@ async def test_close_recovers_missed_acknowledgement_and_survives_notification_f
     def fail_notification(*args, **kwargs):
         raise RuntimeError("notification unavailable")
 
+    async def run_inline(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
     monkeypatch.setattr("ltm.notifications.service.NotificationService.notify_verify_requested", fail_notification)
+    monkeypatch.setattr("ltm.application.tasks.asyncio.to_thread", run_inline)
     result = await use_cases.close(
         CloseTaskParams(task_id=task_id, completion_notes="Done"),
         assignee,
