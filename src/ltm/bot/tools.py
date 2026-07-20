@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from datetime import date
@@ -11,28 +10,26 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator
 from microsoft_teams.ai import Function
 
+from ltm.application import DraftUseCases, TaskUseCases, UseCaseResult
 from ltm.bot.context import get_actor, push_pending_card
+from ltm.bot.d365_tools import build_d365_functions
 from ltm.policy import AssignmentPolicyError, assert_assignee_department_matches, assert_can_assign, tool_error
-from ltm.policy.access import can_view_task
 from ltm.bot.drafts import stash_draft
 from ltm.bot.commands import format_task_list_message
 from ltm.cards.builders import draft_confirm_card
 from ltm.domain.enums import DeptCode, Priority
 from ltm.domain.models import (
+    AcknowledgeTaskParams,
     CloseTaskParams,
     D365References,
+    DraftActionParams,
     GetTaskParams,
     ListTasksParams,
     ReopenTaskParams,
     ResumeTaskParams,
     TaskCreateDraft,
+    VerifyTaskParams,
 )
-from ltm.d365.facade import D365Facade
-from ltm.notifications.recipients import is_verifier
-from ltm.notifications.service import NotificationService
-from ltm.config.settings import get_settings
-from ltm.storage.db import session_scope
-from ltm.storage.repository import TaskRepository
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +99,7 @@ async def create_task_handler(params: CreateTaskToolParams) -> str:
         due_date=date.fromisoformat(params.due_date),
         d365=d365,
     )
-    draft_id = stash_draft(draft)
+    draft_id = stash_draft(draft, actor.entra_object_id)
     card = draft_confirm_card(
         draft_id=draft_id,
         task_type=draft.task_type,
@@ -128,189 +125,75 @@ class EmptyParams(BaseModel):
 
 async def list_tasks_handler(params: ListTasksParams) -> str:
     actor = get_actor()
-    with session_scope() as session:
-        repo = TaskRepository(session)
-        rows = list(repo.list_tasks(params, actor.entra_object_id))
-    return format_task_list_message(tasks=rows, variant=params.filter)
+    result = TaskUseCases().list_tasks(params, actor)
+    return format_task_list_message(tasks=result.value or [], variant=params.filter)
+
+
+def _task_result_json(result: UseCaseResult[Any]) -> str:
+    if not result.ok:
+        return tool_error(result.code, result.message)
+    value = result.value
+    if isinstance(value, list):
+        payload: Any = [item.model_dump(mode="json") for item in value]
+    elif hasattr(value, "model_dump"):
+        payload = value.model_dump(mode="json")
+    else:
+        payload = value
+    return json.dumps(
+        {"ok": True, "code": result.code, "message": result.message, "value": payload, "warnings": result.warnings},
+        default=str,
+    )
+
+
+async def acknowledge_task_handler(params: AcknowledgeTaskParams) -> str:
+    actor = get_actor()
+    return _task_result_json(TaskUseCases().acknowledge(params.task_id, actor))
+
+
+async def confirm_task_draft_handler(params: DraftActionParams) -> str:
+    return _task_result_json(await DraftUseCases().confirm(params.draft_id, get_actor()))
+
+
+async def cancel_task_draft_handler(params: DraftActionParams) -> str:
+    return _task_result_json(DraftUseCases().cancel(params.draft_id, get_actor()))
 
 
 async def close_task_handler(params: CloseTaskParams) -> str:
     actor = get_actor()
-    settings = get_settings()
-    with session_scope() as session:
-        repo = TaskRepository(session)
-        task = repo.get(params.task_id)
-        if task is None:
-            return tool_error("NOT_FOUND", f"Task {params.task_id} was not found.")
-        if task.assigned_to.entra_object_id != actor.entra_object_id:
-            return tool_error("NOT_ASSIGNEE", "Only the assignee can close this task.")
-        try:
-            rec = repo.mark_pending_closure_from_assignee(params, actor.entra_object_id)
-        except ValueError as exc:
-            return tool_error("INVALID_STATUS", str(exc))
-        try:
-            await asyncio.to_thread(
-                NotificationService(session, settings).notify_verify_requested,
-                rec,
-                completion_notes=params.completion_notes,
-            )
-        except Exception:  # noqa: BLE001
-            logger.exception("Verifier notification failed for task %s", rec.id)
-
-    return json.dumps(rec.model_dump(mode="json"), default=str)
+    return _task_result_json(await TaskUseCases().close(params, actor))
 
 
 async def reopen_task_handler(params: ReopenTaskParams) -> str:
     actor = get_actor()
-    settings = get_settings()
-    with session_scope() as session:
-        repo = TaskRepository(session)
-        task = repo.get(params.task_id)
-        if task is None:
-            return tool_error("NOT_FOUND", f"Task {params.task_id} was not found.")
-        if not is_verifier(actor.entra_object_id, task, settings):
-            return tool_error("NOT_VERIFIER", "Only the configured verifier can reopen this task.")
-        try:
-            rec = repo.manager_reject(params.task_id, actor.entra_object_id, params.reason)
-        except ValueError as exc:
-            return tool_error("INVALID_STATUS", str(exc))
-        try:
-            await asyncio.to_thread(
-                NotificationService(session, settings).notify_task_reopened,
-                rec,
-                reason=params.reason,
-            )
-        except Exception:  # noqa: BLE001
-            logger.exception("Reopened notification failed for task %s", rec.id)
+    return _task_result_json(await TaskUseCases().reopen(params.task_id, params.reason, actor))
 
-    return json.dumps(rec.model_dump(mode="json"), default=str)
+
+async def verify_task_handler(params: VerifyTaskParams) -> str:
+    return _task_result_json(await TaskUseCases().verify(params.task_id, get_actor()))
 
 
 async def resume_task_handler(params: ResumeTaskParams) -> str:
     actor = get_actor()
-    with session_scope() as session:
-        repo = TaskRepository(session)
-        task = repo.get(params.task_id)
-        if task is None:
-            return tool_error("NOT_FOUND", f"Task {params.task_id} was not found.")
-        if task.assigned_to.entra_object_id != actor.entra_object_id:
-            return tool_error("NOT_ASSIGNEE", "Only the assignee can resume this task.")
-        try:
-            rec = repo.assignee_resume(params.task_id, actor.entra_object_id)
-        except ValueError as exc:
-            return tool_error("INVALID_STATUS", str(exc))
-
-    return json.dumps(rec.model_dump(mode="json"), default=str)
+    return _task_result_json(TaskUseCases().resume(params.task_id, actor))
 
 
 async def get_task_handler(params: GetTaskParams) -> str:
     actor = get_actor()
-    settings = get_settings()
-    with session_scope() as session:
-        repo = TaskRepository(session)
-        if params.task_id:
-            row = repo.get(params.task_id)
-            if row is None:
-                return tool_error("NOT_FOUND", f"Task {params.task_id} was not found.")
-            if not can_view_task(actor.entra_object_id, row, settings):
-                return tool_error("NOT_AUTHORIZED", "You do not have access to this task.")
-            return json.dumps(row.model_dump(mode="json"), default=str)
-        if params.query:
-            rows = [
-                row
-                for row in repo.search(params.query, limit=100)
-                if can_view_task(actor.entra_object_id, row, settings)
-            ][:10]
-            return json.dumps([r.model_dump(mode="json") for r in rows], default=str)
-        return '{"error":"task_id_or_query_required"}'
-
-
-def _facade() -> D365Facade:
-    return D365Facade(get_settings())
-
-
-def _log_d365_tool_result(tool_name: str, params: BaseModel, result: str) -> str:
-    """Return D365 output unchanged without putting business data in logs."""
-    logger.info(
-        "D365 tool completed: tool=%s parameter_fields=%s result_length=%s",
-        tool_name,
-        sorted(params.model_fields_set),
-        len(result),
-    )
-    return result
-
-
-class POParams(BaseModel):
-    po_number: str
-
-
-async def query_d365_po_handler(params: POParams) -> str:
-    result = await _facade().lookup_purchase_order(params.po_number)
-    return _log_d365_tool_result("query_d365_po", params, result)
-
-
-class VendorParams(BaseModel):
-    account_or_name: str
-
-
-async def query_d365_vendor_handler(params: VendorParams) -> str:
-    result = await _facade().lookup_vendor(params.account_or_name)
-    return _log_d365_tool_result("query_d365_vendor", params, result)
-
-
-class CustomerParams(BaseModel):
-    account_or_name: str
-
-
-async def query_d365_customer_handler(params: CustomerParams) -> str:
-    result = await _facade().lookup_customer(params.account_or_name)
-    return _log_d365_tool_result("query_d365_customer", params, result)
-
-
-class APInvParams(BaseModel):
-    invoice_number: str
-
-
-async def query_d365_invoice_ap_handler(params: APInvParams) -> str:
-    result = await _facade().lookup_invoice_ap(params.invoice_number)
-    return _log_d365_tool_result("query_d365_invoice_ap", params, result)
-
-
-class ARInvParams(BaseModel):
-    invoice_number: str
-
-
-async def query_d365_invoice_ar_handler(params: ARInvParams) -> str:
-    result = await _facade().lookup_invoice_ar(params.invoice_number)
-    return _log_d365_tool_result("query_d365_invoice_ar", params, result)
-
-
-class EmpParams(BaseModel):
-    query: str
-
-
-async def query_d365_employee_handler(params: EmpParams) -> str:
-    result = await _facade().lookup_employee(params.query)
-    return _log_d365_tool_result("query_d365_employee", params, result)
-
-
-class ProjParams(BaseModel):
-    project_key: str
-
-
-async def query_d365_project_handler(params: ProjParams) -> str:
-    result = await _facade().lookup_project(params.project_key)
-    return _log_d365_tool_result("query_d365_project", params, result)
+    if params.task_id:
+        return _task_result_json(TaskUseCases().get_task(params.task_id, actor))
+    if params.query:
+        return _task_result_json(TaskUseCases().search_tasks(params.query, actor))
+    return tool_error("TASK_ID_OR_QUERY_REQUIRED", "Provide a task id or search query.")
 
 
 def build_functions() -> list[Function[Any]]:
-    return [
+    lifecycle_functions = [
         Function[CreateTaskToolParams](
             name="create_task",
             description=(
                 "Propose a task (does not persist until user confirms the Adaptive Card). "
                 "Call immediately when task_type, description, assignee_entra_id, assignee_department_code, "
-                "due_date, and priority are known — the Confirm card is the only confirmation step. "
+                "due_date, and priority are known; the user may confirm by card or explicitly in chat. "
                 "Use enrichments.mentions.resolved in the turn JSON when present; do not ask for an ID already provided. "
                 "If enrichments.mentions.ambiguous is non-empty, wait for the host picker card or user choice before calling. "
                 "Needs assignee_entra_id, dept code FIN|PROC|PROJ|HR|IT|CEO, due_date ISO yyyy-mm-dd."
@@ -338,6 +221,28 @@ def build_functions() -> list[Function[Any]]:
             parameter_schema=CloseTaskParams,
             handler=close_task_handler,
         ),
+        Function[AcknowledgeTaskParams](
+            name="acknowledge_task",
+            description=(
+                "Assignee acknowledges an ASSIGNED task -> IN_PROGRESS. "
+                "Use task_id from enrichments.task_references or the user message. "
+                "This is the chat fallback when the assignment card was not received."
+            ),
+            parameter_schema=AcknowledgeTaskParams,
+            handler=acknowledge_task_handler,
+        ),
+        Function[DraftActionParams](
+            name="confirm_task_draft",
+            description="Confirm and create a prepared task draft. Use the draft_id returned by create_task.",
+            parameter_schema=DraftActionParams,
+            handler=confirm_task_draft_handler,
+        ),
+        Function[DraftActionParams](
+            name="cancel_task_draft",
+            description="Cancel a prepared task draft. Use the draft_id returned by create_task.",
+            parameter_schema=DraftActionParams,
+            handler=cancel_task_draft_handler,
+        ),
         Function[ReopenTaskParams](
             name="reopen_task",
             description=(
@@ -347,6 +252,15 @@ def build_functions() -> list[Function[Any]]:
             ),
             parameter_schema=ReopenTaskParams,
             handler=reopen_task_handler,
+        ),
+        Function[VerifyTaskParams](
+            name="verify_task",
+            description=(
+                "Configured verifier confirms a pending-verification task as complete. "
+                "Authorization is enforced server-side."
+            ),
+            parameter_schema=VerifyTaskParams,
+            handler=verify_task_handler,
         ),
         Function[ResumeTaskParams](
             name="resume_task",
@@ -366,53 +280,23 @@ def build_functions() -> list[Function[Any]]:
             parameter_schema=GetTaskParams,
             handler=get_task_handler,
         ),
-        Function[POParams](
-            name="query_d365_po",
-            description="Read-only PO lookup (named façade).",
-            parameter_schema=POParams,
-            handler=query_d365_po_handler,
-        ),
-        Function[VendorParams](
-            name="query_d365_vendor",
-            description="Read-only vendor lookup.",
-            parameter_schema=VendorParams,
-            handler=query_d365_vendor_handler,
-        ),
-        Function[CustomerParams](
-            name="query_d365_customer",
-            description="Read-only customer lookup.",
-            parameter_schema=CustomerParams,
-            handler=query_d365_customer_handler,
-        ),
-        Function[APInvParams](
-            name="query_d365_invoice_ap",
-            description="AP invoice lookup.",
-            parameter_schema=APInvParams,
-            handler=query_d365_invoice_ap_handler,
-        ),
-        Function[ARInvParams](
-            name="query_d365_invoice_ar",
-            description="AR invoice lookup by invoice number or customer account (e.g. C0002).",
-            parameter_schema=ARInvParams,
-            handler=query_d365_invoice_ar_handler,
-        ),
-        Function[EmpParams](
-            name="query_d365_employee",
-            description="Optional worker enrichment lookup — not authoritative identity.",
-            parameter_schema=EmpParams,
-            handler=query_d365_employee_handler,
-        ),
-        Function[ProjParams](
-            name="query_d365_project",
-            description="Project id or name keyed lookup.",
-            parameter_schema=ProjParams,
-            handler=query_d365_project_handler,
-        ),
     ]
+    return lifecycle_functions + build_d365_functions()
 
 
 _GROQ_CHAT_TOOL_NAMES = frozenset(
-    {"create_task", "list_tasks", "close_task", "reopen_task", "resume_task", "get_task_status"}
+    {
+        "create_task",
+        "list_tasks",
+        "acknowledge_task",
+        "confirm_task_draft",
+        "cancel_task_draft",
+        "close_task",
+        "verify_task",
+        "reopen_task",
+        "resume_task",
+        "get_task_status",
+    }
 )
 
 

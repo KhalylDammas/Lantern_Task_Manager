@@ -172,7 +172,13 @@ class TaskRepository:
         ).scalars()
         return [_orm_to_record(r) for r in rows]
 
-    def list_tasks(self, params: ListTasksParams, viewer_entra_id: str) -> Sequence[TaskRecord]:
+    def list_tasks(
+        self,
+        params: ListTasksParams,
+        viewer_entra_id: str,
+        *,
+        apply_limit: bool = True,
+    ) -> Sequence[TaskRecord]:
         stmt = select(TaskORM)
         status_val = params.status.value if params.status else None
 
@@ -200,7 +206,10 @@ class TaskRepository:
         if status_val:
             stmt = stmt.where(TaskORM.status == status_val)
 
-        rows = self.s.execute(stmt.order_by(TaskORM.due_date).limit(params.limit)).scalars()
+        stmt = stmt.order_by(TaskORM.due_date)
+        if apply_limit:
+            stmt = stmt.limit(params.limit)
+        rows = self.s.execute(stmt).scalars()
         return [_orm_to_record(r) for r in rows]
 
     def assignee_acknowledge(self, task_id: str, assignee_entra_id: str) -> TaskRecord:
@@ -240,29 +249,35 @@ class TaskRepository:
         return _orm_to_record(row)
 
     def mark_pending_closure_from_assignee(self, params: CloseTaskParams, assignee_entra_id: str) -> TaskRecord:
+        """Request verification, recovering gracefully when acknowledgement was missed.
+
+        Completing work is also an unambiguous acknowledgement of the assignment.  Keeping
+        the intermediate transition makes the recovery visible in the audit trail instead of
+        weakening the state machine with an ASSIGNED -> PENDING_VERIFICATION shortcut.
+        """
         row = self.s.get(TaskORM, params.task_id)
         if not row:
             raise ValueError("Task not found")
         if row.assigned_to_entra_id != assignee_entra_id:
             raise ValueError("Only the assignee can close this task")
-        current = TaskStatus(row.status)
-        target = TaskStatus.PENDING_VERIFICATION
-        if not can_transition(current, target):
-            raise ValueError(f"Cannot move task from {current} to {target}")
 
-        row.status = target.value
+        if row.status == TaskStatus.ASSIGNED.value:
+            self._transition(
+                row,
+                target=TaskStatus.IN_PROGRESS,
+                actor_entra_id=assignee_entra_id,
+                audit_event=AuditEvent.ACKNOWLEDGED.value,
+                details="Implicit acknowledgement on close",
+            )
+
         row.closure_notes = params.completion_notes
-        row.updated_at = _now()
-        audits = list(row.audit_trail or [])
-        audits.append(
-            {
-                "event": AuditEvent.CLOSURE_REQUESTED.value,
-                "actor_entra_id": assignee_entra_id,
-                "at": row.updated_at.isoformat(),
-                "details": params.completion_notes[:500],
-            }
+        self._transition(
+            row,
+            target=TaskStatus.PENDING_VERIFICATION,
+            actor_entra_id=assignee_entra_id,
+            audit_event=AuditEvent.CLOSURE_REQUESTED.value,
+            details=params.completion_notes,
         )
-        row.audit_trail = audits
         self.s.flush()
         return _orm_to_record(row)
 
