@@ -28,7 +28,7 @@ def help_message_text(*, graph_enabled: bool) -> str:
         "**Confirm in chat is not enough** — new tasks save only after you click **Confirm** on the Adaptive Card.",
         "",
         "**Verifiers** — confirm or reopen tasks from the verification card, or ask in chat to reopen a task (a reason is required).",
-        "**Assignees** — acknowledge new tasks, and resume a reopened task from its card or by asking in chat.",
+        "**Assignees** — acknowledge new tasks, close completed work, and resume reopened tasks from a card or by asking in chat.",
         "",
         "LTM tracks operational tasks; it does not write to Dynamics 365 or perform ERP work.",
     ]

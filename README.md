@@ -114,3 +114,6 @@ Cron routes require `X-LTM-Cron-Secret` to match `LTM_CRON_SECRET`.
 Provisioning stores bot, LLM, Turso, D365, and cron secrets in Azure Key Vault and exposes Key Vault references to App Service. The Teams manifest uses the deployed bot domain for the legal URLs and valid-domain declaration.
 
 More detail is available in `docs/LTM_LOCAL_SETUP.md`, `docs/LTM_SYSTEM_SPEC.md`, and the runbooks under `docs/runbooks/`.
+
+The active code dependency rules and card/chat interaction contract are documented in
+`docs/LTM_RUNTIME_ARCHITECTURE.md`.

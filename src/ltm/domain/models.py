@@ -72,6 +72,18 @@ class CloseTaskParams(BaseModel):
     completion_notes: Annotated[str, Field(min_length=1, max_length=8000)]
 
 
+class AcknowledgeTaskParams(BaseModel):
+    task_id: str
+
+
+class DraftActionParams(BaseModel):
+    draft_id: str
+
+
+class VerifyTaskParams(BaseModel):
+    task_id: str
+
+
 class ReopenTaskParams(BaseModel):
     task_id: str
     reason: Annotated[str, Field(min_length=1, max_length=8000)]

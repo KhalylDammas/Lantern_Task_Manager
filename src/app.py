@@ -3,16 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import hmac
 import logging
 import os
-import time
 from pathlib import Path
 from typing import Any, cast
 
-import httpx
-from azure.identity import ManagedIdentityCredential
-from sqlalchemy import text as sa_text
 from microsoft_teams.ai import AIModel, ChatPrompt, Function, ListMemory
 from microsoft_teams.api import (
     AdaptiveCardInvokeActivity,
@@ -21,22 +16,18 @@ from microsoft_teams.api import (
     MessageActivityInput,
     MessageSubmitActionInvokeActivity,
 )
-from microsoft_teams.api.auth.json_web_token import JsonWebToken
-from microsoft_teams.api.clients.user.token_client import UserTokenClient
 from microsoft_teams.api.models.adaptive_card.adaptive_card_action_response import AdaptiveCardActionMessageResponse
-from microsoft_teams.apps import App, ActivityContext
-from microsoft_teams.apps.token_manager import TokenManager
+from microsoft_teams.apps import ActivityContext
 from microsoft_teams.cards import AdaptiveCard
-from microsoft_teams.common.http import ClientOptions
 
-from config import Config
-from ltm.auth.tokens import auth_mode, graph_configured, verify_graph_access
-from ltm.ai.gateway import llm_health_snapshot
+from ltm.auth.tokens import auth_mode, graph_configured
 from ltm.ai.memory_trim import trim_conversation_memory
 from ltm.ai.model_factory import build_ai_model
 from ltm.ai.redaction import redact
 from ltm.ai.turn_payload import ActorContext, build_turn_payload, enrich_actor, serialize_turn_payload
 from ltm.bot.commands import fetch_task_list, format_task_list_message, match_list_filter
+from ltm.bot.app_factory import create_teams_app
+from ltm.bot.card_actions import dispatch_card_action
 from ltm.cards.builders import (
     assignee_disambiguation_card,
     draft_confirm_card,
@@ -45,8 +36,8 @@ from ltm.cards.builders import (
 )
 from ltm.bot.context import drain_pending_cards, push_pending_card, set_turn_context
 from ltm.bot.help_text import help_message_text
-from ltm.bot.drafts import discard_draft, stash_draft, take_draft
-from ltm.bot.http_adapter import SanitizingFastAPIAdapter
+from ltm.bot.drafts import stash_draft
+from ltm.bot.http_routes import attach_http_routes
 from ltm.bot.mentions import (
     AmbiguousMentionResolution,
     MentionResolution,
@@ -63,24 +54,22 @@ from ltm.bot.pending_mentions import (
     take_pending_disambiguation,
 )
 from ltm.bot.tools import build_functions, build_functions_for_groq_chat
+from ltm.bot.startup import log_startup_probes
+from ltm.config import initialize_settings
 from ltm.config.settings import get_settings
 from ltm.domain.models import TaskCreateDraft, UserRef
 from ltm.graph.client import GraphClient
-from ltm.notifications.recipients import is_verifier
 from ltm.notifications.service import NotificationService
 from ltm.policy import AssignmentPolicyError, assert_assignee_department_matches, assert_can_assign
-from ltm.policy.access import can_view_task
 from ltm.storage.conversation_bindings import ConversationBindingRepository
 from ltm.storage.db import session_scope
-from ltm.storage.repository import TaskRepository
 
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 
-config = Config()
+settings = initialize_settings()
 BOT_SEND_TIMEOUT_SECONDS = float(os.environ.get("BOT_SEND_TIMEOUT_SECONDS", "20"))
 BOT_HTTP_TIMEOUT_SECONDS = float(os.environ.get("BOT_HTTP_TIMEOUT_SECONDS", "10"))
-_local_bot_token: JsonWebToken | None = None
 
 _INSTRUCTIONS_PATH = Path(__file__).resolve().parent / "ltm" / "ai" / "instructions.txt"
 
@@ -95,15 +84,6 @@ def load_instructions() -> str:
 INSTRUCTIONS = load_instructions()
 
 
-def create_token_factory():
-    def get_token(scopes, tenant_id=None):
-        credential = ManagedIdentityCredential(client_id=config.APP_ID)
-        scopes_list = [scopes] if isinstance(scopes, str) else list(scopes)
-        return credential.get_token(*scopes_list).token
-
-    return get_token
-
-
 def env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -115,58 +95,10 @@ def text_preview(value: str | None, *, limit: int = 180) -> str:
     return preview[: limit - 3] + "..."
 
 
-if env_flag("BOT_SKIP_AUTH"):
-    async def _local_bot_connector_token(self: TokenManager) -> JsonWebToken:
-        global _local_bot_token
-        if _local_bot_token and not _local_bot_token.is_expired():
-            return _local_bot_token
-
-        data = {
-            "grant_type": "client_credentials",
-            "client_id": config.APP_ID,
-            "client_secret": config.APP_PASSWORD,
-            "scope": "https://api.botframework.com/.default",
-        }
-        tenant_ids = [tid for tid in (config.APP_TENANTID, "botframework.com") if tid]
-        last_error: Exception | None = None
-        timeout = httpx.Timeout(BOT_HTTP_TIMEOUT_SECONDS)
-
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            for tenant_id in tenant_ids:
-                url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
-                logger.info("Acquiring local Bot Connector token: tenant=%s timeout=%ss", tenant_id, BOT_HTTP_TIMEOUT_SECONDS)
-                try:
-                    response = await client.post(url, data=data)
-                    response.raise_for_status()
-                    token = response.json().get("access_token")
-                    if isinstance(token, str) and token:
-                        _local_bot_token = JsonWebToken(token)
-                        logger.info("Local Bot Connector token acquired: tenant=%s", tenant_id)
-                        return _local_bot_token
-                except Exception as exc:  # noqa: BLE001
-                    last_error = exc
-                    logger.warning("Local Bot Connector token acquisition failed for tenant=%s: %s", tenant_id, exc)
-
-        raise RuntimeError("Local Bot Connector token acquisition failed") from last_error
-
-    async def _skip_local_user_token_lookup(self: UserTokenClient, params: Any) -> Any:
-        logger.info(
-            "Skipping local Bot Framework user token lookup: user_id=%s channel_id=%s connection=%s",
-            getattr(params, "user_id", None),
-            getattr(params, "channel_id", None),
-            getattr(params, "connection_name", None),
-        )
-        raise RuntimeError("User token lookup disabled for local preview")
-
-    TokenManager.get_bot_token = _local_bot_connector_token
-    UserTokenClient.get = _skip_local_user_token_lookup
-
-
-app = App(
-    token=create_token_factory() if config.APP_TYPE == "UserAssignedMsi" else None,
-    client=ClientOptions(timeout=BOT_HTTP_TIMEOUT_SECONDS),
-    http_server_adapter=SanitizingFastAPIAdapter(),
+app = create_teams_app(
+    settings,
     skip_auth=env_flag("BOT_SKIP_AUTH"),
+    http_timeout=BOT_HTTP_TIMEOUT_SECONDS,
 )
 
 _ai_model_singleton: AIModel | None = None
@@ -244,7 +176,7 @@ async def _send_confirm_draft_card(
     if denial:
         return denial
 
-    draft_id = stash_draft(draft)
+    draft_id = stash_draft(draft, requester.entra_object_id)
     card = draft_confirm_card(
         draft_id=draft_id,
         task_type=draft.task_type,
@@ -628,31 +560,25 @@ async def handle_card_action(
             logger.exception("Card action follow-up ctx.send failed")
         return InvokeResponse(status=200, body=AdaptiveCardActionMessageResponse(value=msg or "OK"))
 
-    if verb == "cancel_draft":
-        did = merged.get("draft_id")
-        if isinstance(did, str):
-            discard_draft(did)
-        return await respond("Draft cancelled.", outcome="cancelled")
-
-    if verb == "confirm_task":
-        did = merged.get("draft_id")
-        if not isinstance(did, str):
-            return await respond("Missing draft reference.", outcome="missing_draft_id")
-        draft = take_draft(did)
-        if draft is None:
-            return await respond("Draft expired or already confirmed.", outcome="draft_expired")
-        requester = sender_user_ref(ctx.activity)
-        denial = assignment_authorization_error(requester, draft)
-        if denial:
-            return await respond(denial, outcome="denied")
-        with session_scope() as session:
-            repo = TaskRepository(session)
-            rec = repo.create_from_draft(draft, requester)
-            try:
-                await asyncio.to_thread(NotificationService(session, get_settings()).notify_task_assigned, rec)
-            except Exception:  # noqa: BLE001
-                logger.exception("Assignee notification failed task=%s", rec.id)
-        return await respond(f"Task created: {rec.id}", outcome="created")
+    dispatched = await dispatch_card_action(verb, merged, sender_user_ref(ctx.activity))
+    if dispatched.handled:
+        result = dispatched.result
+        if result is None:
+            return await respond("Card action failed.", outcome="dispatch_error")
+        if result.code == "TASK_FOUND" and result.value is not None:
+            task = result.value
+            card = task_detail_card(
+                task_id=task.id,
+                task_type=task.task_type,
+                status=str(task.status),
+                due=str(task.due_date),
+                priority=str(task.priority),
+                assignee_name=task.assigned_to.display_name or task.assigned_to.entra_object_id,
+                created_by_name=task.created_by.display_name or task.created_by.entra_object_id,
+                description=task.description,
+            )
+            return await respond("", outcome="task_found", card=card)
+        return await respond(result.message, outcome=result.code.lower())
 
     if verb == "manual_create_submit":
         try:
@@ -773,115 +699,6 @@ async def handle_card_action(
         clear_mention_overrides(pending.conversation_id)
         return await respond("Continuing with your selected assignee.", outcome="continued")
 
-    if verb == "ack_task":
-        task_id = merged.get("task_id")
-        if not isinstance(task_id, str):
-            return await respond("Missing task id.", outcome="missing_task_id")
-        with session_scope() as session:
-            repo = TaskRepository(session)
-            task = repo.get(task_id)
-            if task is None:
-                return await respond("Task not found.", outcome="not_found")
-            if task.assigned_to.entra_object_id != uid:
-                return await respond("Only the assignee can acknowledge this task.", outcome="denied")
-            try:
-                repo.assignee_acknowledge(task_id, uid)
-            except ValueError as exc:
-                return await respond(str(exc), outcome="invalid_status")
-        return await respond(f"Acknowledged: {task_id}. Task is now in progress.", outcome="acknowledged")
-
-    if verb == "resume_task":
-        task_id = merged.get("task_id")
-        if not isinstance(task_id, str):
-            return await respond("Missing task id.", outcome="missing_task_id")
-        with session_scope() as session:
-            repo = TaskRepository(session)
-            task = repo.get(task_id)
-            if task is None:
-                return await respond("Task not found.", outcome="not_found")
-            if task.assigned_to.entra_object_id != uid:
-                return await respond("Only the assignee can resume this task.", outcome="denied")
-            try:
-                repo.assignee_resume(task_id, uid)
-            except ValueError as exc:
-                return await respond(str(exc), outcome="invalid_status")
-        return await respond(f"Resumed: {task_id}. Task is now in progress.", outcome="resumed")
-
-    if verb == "view_task":
-        task_id = merged.get("task_id")
-        if not isinstance(task_id, str):
-            return await respond("Missing task id.", outcome="missing_task_id")
-        with session_scope() as session:
-            task = TaskRepository(session).get(task_id)
-            if task is None:
-                return await respond("Task not found.", outcome="not_found")
-            if not can_view_task(uid, task, get_settings()):
-                return await respond("You do not have access to this task.", outcome="denied")
-            card = task_detail_card(
-                task_id=task.id,
-                task_type=task.task_type,
-                status=str(task.status),
-                due=str(task.due_date),
-                priority=str(task.priority),
-                assignee_name=task.assigned_to.display_name or task.assigned_to.entra_object_id,
-                created_by_name=task.created_by.display_name or task.created_by.entra_object_id,
-                description=task.description,
-            )
-        return await respond("", outcome="viewed", card=card)
-
-    if verb == "manager_verify_confirm":
-        task_id = merged.get("task_id")
-        if not isinstance(task_id, str):
-            return await respond("Missing task id.", outcome="missing_task_id")
-        settings = get_settings()
-        with session_scope() as session:
-            repo = TaskRepository(session)
-            task = repo.get(task_id)
-            if task is None:
-                return await respond("Task not found.", outcome="not_found")
-            if not is_verifier(uid, task, settings):
-                return await respond("You are not the configured verifier for this task.", outcome="denied")
-            try:
-                repo.manager_confirm(task_id, uid)
-            except ValueError as exc:
-                return await respond(str(exc), outcome="invalid_status")
-            verified = repo.get(task_id)
-            try:
-                await asyncio.to_thread(NotificationService(session, settings).notify_task_verified, verified)
-            except Exception:  # noqa: BLE001
-                logger.exception("Verified notification failed task=%s", task_id)
-        return await respond(f"{task_id} verified.", outcome="verified")
-
-    if verb == "manager_verify_reject":
-        task_id = merged.get("task_id")
-        reason = str(merged.get("rejection_reason") or "")
-        if not isinstance(task_id, str):
-            return await respond("Missing task id.", outcome="missing_task_id")
-        if not reason.strip():
-            return await respond("Rejection reason required.", outcome="missing_reason")
-        settings = get_settings()
-        with session_scope() as session:
-            repo = TaskRepository(session)
-            task = repo.get(task_id)
-            if task is None:
-                return await respond("Task not found.", outcome="not_found")
-            if not is_verifier(uid, task, settings):
-                return await respond("You are not the configured verifier for this task.", outcome="denied")
-            try:
-                repo.manager_reject(task_id, uid, reason.strip())
-            except ValueError as exc:
-                return await respond(str(exc), outcome="invalid_status")
-            reopened = repo.get(task_id)
-            try:
-                await asyncio.to_thread(
-                    NotificationService(session, settings).notify_task_reopened,
-                    reopened,
-                    reason=reason.strip(),
-                )
-            except Exception:  # noqa: BLE001
-                logger.exception("Reopened notification failed task=%s", task_id)
-        return await respond(f"{task_id} reopened.", outcome="reopened")
-
     return await respond("Unknown card action.", outcome="unknown_verb")
 
 
@@ -918,177 +735,11 @@ async def handle_conversation_update(ctx: ActivityContext[Any]) -> None:
         logger.exception("Welcome notification failed user=%s", user.entra_object_id)
 
 
-_GRAPH_HEALTH_CACHE_SECONDS = 300.0
-_graph_health_cache: tuple[float, bool, str, str] | None = None
-
-
-def _graph_health(force: bool = False) -> tuple[bool, str, str]:
-    """Cached Graph probe so /health pings don't hammer the token endpoint."""
-    global _graph_health_cache
-    now = time.monotonic()
-    if not force and _graph_health_cache is not None:
-        cached_at, ok, mode, detail = _graph_health_cache
-        if now - cached_at < _GRAPH_HEALTH_CACHE_SECONDS:
-            return ok, mode, detail
-    ok, mode, detail = verify_graph_access(get_settings())
-    _graph_health_cache = (now, ok, mode, detail)
-    return ok, mode, detail
-
-
-def _database_health() -> tuple[bool, str, str]:
-    try:
-        from ltm.storage.engine_config import build_engine_config
-
-        backend = build_engine_config().backend
-        with session_scope() as session:
-            session.execute(sa_text("SELECT 1"))
-        return True, backend, "Database reachable"
-    except Exception as exc:  # noqa: BLE001
-        return False, "", f"Database check failed: {exc}"
-
-
-def _log_startup_graph_probe() -> None:
-    """Fail loudly (in logs) when Graph is misconfigured, instead of silently degrading."""
-    ok, mode, detail = _graph_health(force=True)
-    if ok:
-        logger.info("Startup Graph probe OK: mode=%s", mode)
-    elif os.environ.get("TEAMSFX_ENV", "").strip().lower() == "playground":
-        logger.info("Startup Graph probe skipped in Playground: %s", detail)
-    else:
-        logger.error(
-            "Startup Graph probe FAILED (CLIENT_ID=%s, mode=%s): %s — mention resolution and /who are degraded. "
-            "On Azure (MSI): grant User.Read.All (Application) on *this* CLIENT_ID app — often not the local Toolkit bot app. "
-            "Run: scripts/grant_msi_graph_permissions.sh %s",
-            get_settings().client_id,
-            mode,
-            detail,
-            get_settings().client_id or "<msi-client-id>",
-        )
-
-
-def _log_startup_d365_probe() -> None:
-    """Fail loudly when D365 lookups are enabled but environment URL is missing."""
-    settings = get_settings()
-    url = (settings.d365_environment_url or "").strip()
-    if url:
-        logger.info(
-            "Startup D365 probe OK: environment=%s data_area=%s client_id=%s",
-            url,
-            settings.d365_default_data_area_id or "(none)",
-            settings.d365_client_id or "(unset)",
-        )
-        return
-    if settings.llm_tool_profile == "full":
-        logger.error(
-            "Startup D365 probe FAILED: D365_ENVIRONMENT_URL is unset — query_d365_* tools return stub JSON. "
-            "Set D365_ENVIRONMENT_URL, D365_CLIENT_ID, SECRET_D365_CLIENT_SECRET (env/.env.dev.user), "
-            "D365_TENANT_ID, and D365_DATA_AREA_ID, then restart."
-        )
-    else:
-        logger.info("Startup D365 probe skipped (LLM_TOOL_PROFILE=%s)", settings.llm_tool_profile)
-
-
-_HTTP_ROUTES_ATTACHED = False
-_LEGAL_DIR = Path(__file__).resolve().parent / "static" / "legal"
-
-
-def _read_legal_page(filename: str) -> str:
-    path = _LEGAL_DIR / filename
-    return path.read_text(encoding="utf-8")
-
-
-def _attach_health_route() -> None:
-    global _HTTP_ROUTES_ATTACHED
-    if _HTTP_ROUTES_ATTACHED:
-        return
-
-    adapter = getattr(app.server.adapter, "app", None)
-    if adapter is None:
-        return
-
-    from fastapi import Header, Query
-    from fastapi.responses import HTMLResponse, JSONResponse
-
-    from ltm.notifications.scheduled_jobs import (
-        run_daily_summary,
-        run_notification_retry,
-        run_overdue_refresh_and_notify,
-    )
-
-    def _cron_authorized(secret_header: str | None) -> bool:
-        expected = (get_settings().cron_secret or "").strip()
-        if not expected:
-            return False
-        supplied = (secret_header or "").strip()
-        return bool(supplied) and hmac.compare_digest(supplied, expected)
-
-    @adapter.get("/")
-    async def legal_home():
-        return HTMLResponse(content=_read_legal_page("index.html"))
-
-    @adapter.get("/privacy")
-    async def legal_privacy():
-        return HTMLResponse(content=_read_legal_page("privacy.html"))
-
-    @adapter.get("/terms")
-    async def legal_terms():
-        return HTMLResponse(content=_read_legal_page("terms.html"))
-
-    @adapter.get("/health")
-    async def health():
-        graph_ok, graph_mode, graph_detail = await asyncio.to_thread(_graph_health)
-        db_ok, db_backend, db_detail = await asyncio.to_thread(_database_health)
-        llm = await asyncio.to_thread(llm_health_snapshot)
-        payload = {
-            "status": "ok" if db_ok else "degraded",
-            "program": "ltm",
-            "graph": {"ok": graph_ok, "mode": graph_mode, "detail": graph_detail},
-            "database": {"ok": db_ok, "backend": db_backend, "detail": db_detail},
-            "llm": llm,
-        }
-        return JSONResponse(content=payload, status_code=200 if db_ok else 503)
-
-    @adapter.post("/internal/cron/overdue")
-    async def cron_overdue(x_ltm_cron_secret: str | None = Header(default=None, alias="X-LTM-Cron-Secret")):
-        if not _cron_authorized(x_ltm_cron_secret):
-            return JSONResponse({"error": "cron disabled or unauthorized"}, status_code=403)
-        stats = await asyncio.to_thread(run_overdue_refresh_and_notify)
-        return JSONResponse({"ok": True, "stats": stats})
-
-    @adapter.post("/internal/cron/daily-summary")
-    async def cron_daily_summary(
-        assignee_entra_id: str | None = Query(default=None, description="Send summary to one user only (test)"),
-        force: bool = Query(default=False, description="Bypass per-user idempotency; requires assignee_entra_id"),
-        x_ltm_cron_secret: str | None = Header(default=None, alias="X-LTM-Cron-Secret"),
-    ):
-        if not _cron_authorized(x_ltm_cron_secret):
-            return JSONResponse({"error": "cron disabled or unauthorized"}, status_code=403)
-        if force and not assignee_entra_id:
-            return JSONResponse(
-                {"error": "force requires assignee_entra_id for a single-user test send"},
-                status_code=400,
-            )
-        stats = await asyncio.to_thread(
-            run_daily_summary,
-            assignee_entra_id=assignee_entra_id,
-            force=force,
-        )
-        return JSONResponse({"ok": True, "stats": stats})
-
-    @adapter.post("/internal/cron/notification-retry")
-    async def cron_notification_retry(x_ltm_cron_secret: str | None = Header(default=None, alias="X-LTM-Cron-Secret")):
-        if not _cron_authorized(x_ltm_cron_secret):
-            return JSONResponse({"error": "cron disabled or unauthorized"}, status_code=403)
-        stats = await asyncio.to_thread(run_notification_retry)
-        return JSONResponse({"ok": True, "stats": stats})
-
-    _HTTP_ROUTES_ATTACHED = True
-
-
-_attach_health_route()
+_adapter_app = getattr(app.server.adapter, "app", None)
+if _adapter_app is not None:
+    attach_http_routes(_adapter_app, Path(__file__).resolve().parent / "static" / "legal")
 
 
 if __name__ == "__main__":
-    _log_startup_graph_probe()
-    _log_startup_d365_probe()
-    asyncio.run(app.start(config.PORT))
+    log_startup_probes()
+    asyncio.run(app.start(settings.port))

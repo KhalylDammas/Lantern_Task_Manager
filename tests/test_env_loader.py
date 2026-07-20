@@ -3,9 +3,14 @@ from __future__ import annotations
 from ltm.config import env_loader
 
 
-def test_dotenv_paths_are_isolated_to_active_environment(monkeypatch) -> None:
+def test_dotenv_paths_are_isolated_to_active_environment(monkeypatch, tmp_path) -> None:
+    env_dir = tmp_path / "env"
+    env_dir.mkdir()
+    for name in (".env.playground", ".env.playground.user", ".env.dev", ".env.local"):
+        (env_dir / name).write_text(f"SOURCE={name}\n", encoding="utf-8")
+
+    monkeypatch.setattr(env_loader, "repo_root", lambda: tmp_path)
     monkeypatch.setenv("TEAMSFX_ENV", "playground")
-    monkeypatch.setattr(env_loader, "dotenv_values", lambda _: {"TEAMSFX_ENV": "local"})
     paths = env_loader.dotenv_paths()
     names = {path.name for path in paths}
 
