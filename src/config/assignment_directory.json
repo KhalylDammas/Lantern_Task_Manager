@@ -60,6 +60,18 @@
       "department_code": "FIN",
       "active": true,
       "manager_entra_id": "5f158a0b-3daa-4b3a-a66e-cb77dcfe7e07"
+    },
+    "f23d75b4-adbd-4454-bfcd-ff00b7fd1c86": {
+      "display_name": "Mesfer Saif Alsubaie",
+      "department_code": "HR",
+      "active": true,
+      "manager_entra_id": "d5b03abf-9013-49af-b7ee-890567cc792d"
+    },
+    "f9cf804c-efe4-4598-875d-029830b5da2d": {
+      "display_name": "MGH Faizal",
+      "department_code": "OP",
+      "active": true,
+      "manager_entra_id": "d5b03abf-9013-49af-b7ee-890567cc792d"
     }
   }
 }

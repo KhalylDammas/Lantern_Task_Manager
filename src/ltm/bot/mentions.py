@@ -120,8 +120,8 @@ def _department_code(department: str) -> str:
     for code, display in DEPT_DISPLAY.items():
         if normalized in {code.value.lower(), display.lower()}:
             return code.value
-    if normalized in {"project", "projects"}:
-        return DeptCode.PROJ.value
+    if normalized in {"operation", "operations", "op"}:
+        return DeptCode.OP.value
     if normalized in {"procurement", "proc"}:
         return DeptCode.PROC.value
     if normalized in {"finance", "fin"}:
