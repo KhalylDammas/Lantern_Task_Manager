@@ -33,6 +33,7 @@ from ltm.cards.builders import (
     assignee_disambiguation_card,
     draft_confirm_card,
     task_assignment_card,
+    task_created_card,
     task_detail_card,
 )
 from ltm.bot.context import (
@@ -741,10 +742,10 @@ async def handle_card_action(
         if result.code == "TASK_CREATED" and result.value is not None:
             interaction_store.clear(actor_id=uid, conversation_id=ctx.activity.conversation.id)
             task = result.value
-            card = task_assignment_card(
+            card = task_created_card(
                 task_id=task.id, task_type=task.task_type, description=task.description,
                 due=str(task.due_date), priority=str(task.priority),
-                created_by_name=task.created_by.display_name or task.created_by.entra_object_id)
+                assignee_name=task.assigned_to.display_name or task.assigned_to.entra_object_id)
             return await respond(result.message, outcome="task_created", card=card)
         if result.code == "DRAFT_CANCELLED":
             interaction_store.clear(actor_id=uid, conversation_id=ctx.activity.conversation.id)
