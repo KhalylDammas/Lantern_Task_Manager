@@ -32,12 +32,17 @@ from ltm.bot.card_actions import dispatch_card_action
 from ltm.cards.builders import (
     assignee_disambiguation_card,
     draft_confirm_card,
-    manual_task_form_card,
+    task_assignment_card,
     task_detail_card,
 )
-from ltm.bot.context import drain_pending_cards, push_pending_card, set_turn_context
+from ltm.bot.context import (
+    drain_pending_cards,
+    get_interaction_revision,
+    set_interaction_revision,
+    set_turn_context,
+)
 from ltm.bot.help_text import help_message_text
-from ltm.bot.drafts import stash_draft
+from ltm.bot.drafts import discard_draft, peek_draft, stash_draft
 from ltm.bot.http_routes import attach_http_routes
 from ltm.bot.mentions import (
     AmbiguousMentionResolution,
@@ -47,21 +52,30 @@ from ltm.bot.mentions import (
     resolve_mentions_structured,
 )
 from ltm.bot.pending_mentions import (
-    build_manual_draft,
     clear_mention_overrides,
     get_mention_overrides,
     set_mention_override,
     stash_pending_disambiguation,
     take_pending_disambiguation,
 )
-from ltm.bot.tools import build_functions, build_functions_for_groq_chat
+from ltm.bot.tools import CreateTaskToolParams, build_functions, build_functions_for_groq_chat, create_task_handler
 from ltm.bot.startup import log_startup_probes
 from ltm.config import initialize_settings
 from ltm.config.settings import get_settings
-from ltm.domain.models import TaskCreateDraft, UserRef
+from ltm.domain.models import CloseTaskParams, UserRef
+from ltm.application import TaskUseCases
+from ltm.interaction.models import InteractionOperation, InteractionOrigin
+from ltm.interaction.store import InteractionStore
+from ltm.interaction.coordinator import ResponseCoordinator
+from ltm.interaction.normalization import (
+    clarification_assignee_query,
+    extract_priority,
+    parse_due_date,
+    refers_to_self,
+)
+from ltm.policy.profiles import department_label, get_profile
 from ltm.graph.client import GraphClient
 from ltm.notifications.service import NotificationService
-from ltm.policy import AssignmentPolicyError, assert_assignee_department_matches, assert_can_assign
 from ltm.storage.conversation_bindings import ConversationBindingRepository
 from ltm.storage.db import session_scope
 
@@ -134,22 +148,6 @@ def sender_user_ref(activity: Any) -> UserRef:
     return UserRef(entra_object_id=str(oid), display_name=str(s.name or ""), department="")
 
 
-def assignment_authorization_error(requester: UserRef, draft: TaskCreateDraft) -> str | None:
-    """Return user-visible denial message, or None when assignment is allowed."""
-    try:
-        assert_assignee_department_matches(
-            assignee_entra_id=draft.assignee_entra_id,
-            assignee_department_code=draft.assignee_department_code,
-        )
-        assert_can_assign(
-            requester_entra_id=requester.entra_object_id,
-            assignee_entra_id=draft.assignee_entra_id,
-        )
-    except AssignmentPolicyError as exc:
-        return exc.user_message
-    return None
-
-
 def _increment_turns_before_card(conversation_id: str) -> None:
     _turns_before_card[conversation_id] = _turns_before_card.get(conversation_id, 0) + 1
 
@@ -164,60 +162,30 @@ def _log_turns_before_card(conversation_id: str, *, event: str) -> None:
     )
 
 
-async def _send_confirm_draft_card(
-    ctx: ActivityContext[Any],
-    draft: TaskCreateDraft,
-    *,
-    assignee: MentionResolution | None = None,
-) -> str | None:
-    """Stash draft and send confirm card. Returns denial message or None on success."""
-
-    requester = sender_user_ref(ctx.activity)
-    denial = assignment_authorization_error(requester, draft)
-    if denial:
-        return denial
-
-    draft_id = stash_draft(draft, requester.entra_object_id)
-    card = draft_confirm_card(
-        draft_id=draft_id,
-        task_type=draft.task_type,
-        assignee=f"{draft.assignee_display_name or draft.assignee_entra_id} ({draft.assignee_department_code.value})",
-        due=str(draft.due_date),
-        priority=str(draft.priority),
-        description=draft.description,
-        po=draft.d365.purchase_order_number,
-        assignee_department=draft.assignee_department or draft.assignee_department_code.value,
-        assignee_mail=assignee.mail if assignee else None,
-        assignee_job_title=assignee.job_title if assignee else None,
-    )
-    await send_with_timeout(ctx, MessageActivityInput().add_card(card), label="confirm draft card")
-    _log_turns_before_card(ctx.activity.conversation.id, event="confirm_card")
-    return None
-
-
 async def _send_disambiguation_intercept(
     ctx: ActivityContext[Any],
     ambiguity: AmbiguousMentionResolution,
     *,
     original_message: str,
-    source: str = "message",
-    manual_form_fields: dict[str, Any] | None = None,
 ) -> None:
     pick_id = stash_pending_disambiguation(
         conversation_id=ctx.activity.conversation.id,
         token=ambiguity.token,
         query=ambiguity.query,
         candidates=ambiguity.candidates,
-        source=source,  # type: ignore[arg-type]
+        source="message",
         original_message=original_message,
-        manual_form_fields=manual_form_fields,
+        actor_id=sender_user_ref(ctx.activity).entra_object_id,
+        expected_revision=get_interaction_revision(),
     )
+    if not pick_id:
+        return
     card = assignee_disambiguation_card(
         pick_id=pick_id,
         token=ambiguity.token,
         query=ambiguity.query,
         candidates=ambiguity.candidates,
-        source=source,
+        source="message",
     )
     await send_with_timeout(ctx, MessageActivityInput().add_card(card), label="assignee disambiguation card")
     await send_with_timeout(
@@ -235,6 +203,7 @@ async def run_ai_turn(
     mention_overrides: dict[str, MentionResolution] | None = None,
     actor: ActorContext | None = None,
     mention_result: Any | None = None,
+    interaction_revision: int | None = None,
 ) -> None:
     model = ai_model()
     settings = get_settings()
@@ -290,22 +259,22 @@ async def run_ai_turn(
         await send_with_timeout(
             ctx,
             MessageActivityInput(
-                text=(
-                    "The assistant path failed. Type form for structured capture — "
-                    "you will still review a confirmation card before the task is created."
-                ),
+                text="The assistant path failed. Please describe the task again in one message.",
             ),
             label="assistant failure response",
-        )
-        await send_with_timeout(
-            ctx,
-            MessageActivityInput().add_card(manual_task_form_card()),
-            label="fallback form",
         )
         return
 
     outgoing = chat_result.response.content or ""
     pending_cards = drain_pending_cards()
+    if interaction_revision is not None and not InteractionStore().is_current(
+        actor_id=turn_payload.actor.entra_object_id,
+        conversation_id=ctx.activity.conversation.id,
+        revision=interaction_revision,
+    ):
+        logger.info("Discarding stale model response: activity_id=%s revision=%s",
+                    ctx.activity.id, interaction_revision)
+        return
     logger.info(
         "AI model response received: activity_id=%s outgoing_length=%s pending_cards=%s",
         ctx.activity.id,
@@ -417,6 +386,158 @@ async def handle_stateful_conversation(ctx: ActivityContext[MessageActivity]) ->
         graph_search is not None,
     )
     lowered = text.lower()
+    actor_ref = sender_user_ref(ctx.activity)
+    interaction_store = InteractionStore()
+    interaction_revision = interaction_store.begin_event(
+        actor_id=actor_ref.entra_object_id,
+        conversation_id=ctx.activity.conversation.id,
+        activity_id=ctx.activity.id or "")
+    set_interaction_revision(interaction_revision)
+
+    if lowered in {"cancel", "never mind", "nevermind", "/cancel"}:
+        cancelled = interaction_store.get(actor_id=actor_ref.entra_object_id,
+                                          conversation_id=ctx.activity.conversation.id)
+        if cancelled and cancelled.operation == InteractionOperation.REVIEW_DRAFT and cancelled.reference_id:
+            discard_draft(cancelled.reference_id, actor_ref.entra_object_id)
+        interaction_store.clear(actor_id=actor_ref.entra_object_id,
+                                conversation_id=ctx.activity.conversation.id)
+        await send_with_timeout(ctx, MessageActivityInput(text="Cancelled."), label="cancel response")
+        return
+
+    pending = interaction_store.get(actor_id=actor_ref.entra_object_id,
+                                    conversation_id=ctx.activity.conversation.id)
+    explicit_new_command = (
+        lowered.startswith(("/", "create ", "new task", "show ", "list ", "close ",
+                            "reopen ", "acknowledge ", "resume ", "verify "))
+        or lowered in {"help", "form", "manual task", "create task form"}
+    )
+    if pending and pending.operation and explicit_new_command:
+        if pending.operation == InteractionOperation.REVIEW_DRAFT and pending.reference_id:
+            discard_draft(pending.reference_id, actor_ref.entra_object_id)
+        interaction_store.clear(actor_id=actor_ref.entra_object_id,
+                                conversation_id=ctx.activity.conversation.id)
+        pending = None
+    if pending and pending.operation in {InteractionOperation.CLOSE_TASK, InteractionOperation.REOPEN_TASK}:
+        origin = InteractionOrigin(actor_entra_id=actor_ref.entra_object_id,
+                                   conversation_id=ctx.activity.conversation.id,
+                                   conversation_type=getattr(ctx.activity.conversation, "conversation_type", "") or "",
+                                   activity_id=ctx.activity.id or "", source="message")
+        interaction_store.clear(actor_id=actor_ref.entra_object_id,
+                                conversation_id=ctx.activity.conversation.id)
+        if pending.operation == InteractionOperation.CLOSE_TASK:
+            result = await TaskUseCases().close(
+                CloseTaskParams(task_id=pending.reference_id, completion_notes=text), actor_ref, origin)
+        else:
+            result = await TaskUseCases().reopen(pending.reference_id, text, actor_ref)
+        await send_with_timeout(ctx, MessageActivityInput(text=result.message), label="pending operation result")
+        return
+
+    if pending and pending.operation == InteractionOperation.CREATE_TASK:
+        slots = dict(pending.slots)
+        if slots.get("disambiguation"):
+            await send_with_timeout(
+                ctx,
+                MessageActivityInput(text="Please choose the assignee from the card, or cancel this request."),
+                label="disambiguation reminder",
+            )
+            return
+        if "due date" in pending.missing_fields:
+            due = parse_due_date(text)
+            if due is not None:
+                slots["due_date"] = due.isoformat()
+        if "assignee" in pending.missing_fields and refers_to_self(text):
+            slots["assignee_entra_id"] = actor_ref.entra_object_id
+            slots["assignee"] = "me"
+        elif "assignee" in pending.missing_fields and graph_search is not None:
+            enriched_actor = await enrich_actor(actor_ref, graph_search)
+            mention_resolution = await resolve_mentions_structured(
+                ctx.activity,
+                search_users=graph_search,
+                requester=enriched_actor,
+            )
+            resolved = mention_resolution.resolved[0] if mention_resolution.resolved else None
+            if resolved is None:
+                assignee_query = clarification_assignee_query(text)
+                pick = await resolve_assignee_name(
+                    assignee_query,
+                    graph_search,
+                    requester=enriched_actor,
+                ) if assignee_query else None
+                resolved = pick.resolved if pick is not None else None
+            if resolved is not None:
+                slots["assignee_entra_id"] = resolved.user.entra_object_id
+                slots["assignee_display_name"] = resolved.user.display_name
+        missing = []
+        if not slots.get("assignee_entra_id"):
+            missing.append("assignee")
+        if parse_due_date(slots.get("due_date")) is None:
+            missing.append("due date")
+        if not missing:
+            interaction_store.clear(actor_id=actor_ref.entra_object_id,
+                                    conversation_id=ctx.activity.conversation.id)
+            result_text = await create_task_handler(CreateTaskToolParams.model_validate(slots))
+            cards = drain_pending_cards()
+            if cards:
+                await send_with_timeout(ctx, MessageActivityInput().add_card(cards[-1]), label="completed draft card")
+            elif result_text:
+                await send_with_timeout(ctx, MessageActivityInput(text=result_text), label="completed draft response")
+            return
+        stored = interaction_store.set_pending(
+            actor_id=actor_ref.entra_object_id,
+            conversation_id=ctx.activity.conversation.id,
+            operation=InteractionOperation.CREATE_TASK, slots=slots,
+            missing_fields=missing, expected_revision=interaction_revision)
+        if stored is None and interaction_store.enabled():
+            return
+        await send_with_timeout(
+            ctx, MessageActivityInput(text=f"I still need {' and '.join(missing)}. Please provide them in one reply."),
+            label="consolidated clarification")
+        return
+
+    if pending and pending.operation == InteractionOperation.REVIEW_DRAFT:
+        draft = peek_draft(pending.reference_id, actor_ref.entra_object_id)
+        if draft is None:
+            interaction_store.clear(actor_id=actor_ref.entra_object_id,
+                                    conversation_id=ctx.activity.conversation.id)
+        else:
+            updates: dict[str, Any] = {}
+            priority = extract_priority(text)
+            if priority is not None:
+                updates["priority"] = priority
+            due = parse_due_date(text)
+            if due is not None:
+                updates["due_date"] = due
+            if refers_to_self(text) or "assign to me" in lowered:
+                profile = get_profile(actor_ref.entra_object_id)
+                updates.update(assignee_entra_id=actor_ref.entra_object_id,
+                               assignee_display_name=profile.display_name or actor_ref.display_name,
+                               assignee_department=department_label(profile.department_code),
+                               assignee_department_code=profile.department_code)
+            if lowered.startswith("description:"):
+                updates["description"] = text.split(":", 1)[1].strip()
+            if lowered.startswith(("title:", "type:")):
+                updates["task_type"] = text.split(":", 1)[1].strip()[:200]
+            if updates:
+                revised = draft.model_copy(update=updates)
+                draft_id = stash_draft(revised, actor_ref.entra_object_id)
+                stored = interaction_store.set_pending(
+                    actor_id=actor_ref.entra_object_id,
+                    conversation_id=ctx.activity.conversation.id,
+                    operation=InteractionOperation.REVIEW_DRAFT, slots={},
+                    missing_fields=[], reference_id=draft_id,
+                    expected_revision=interaction_revision)
+                if stored is None and interaction_store.enabled():
+                    discard_draft(draft_id, actor_ref.entra_object_id)
+                    return
+                discard_draft(pending.reference_id, actor_ref.entra_object_id)
+                card = draft_confirm_card(
+                    draft_id=draft_id, task_type=revised.task_type,
+                    assignee=revised.assignee_display_name or revised.assignee_entra_id,
+                    due=str(revised.due_date), priority=str(revised.priority),
+                    description=revised.description,
+                    assignee_department=revised.assignee_department)
+                await send_with_timeout(ctx, MessageActivityInput().add_card(card), label="revised draft card")
+                return
 
     if lowered in {"/help", "help"}:
         logger.info("Handling help command: activity_id=%s", ctx.activity.id)
@@ -464,8 +585,8 @@ async def handle_stateful_conversation(ctx: ActivityContext[MessageActivity]) ->
         logger.info("Handling form command: activity_id=%s", ctx.activity.id)
         await send_with_timeout(
             ctx,
-            MessageActivityInput().add_card(manual_task_form_card()),
-            label="form card",
+            MessageActivityInput(text="Describe the task naturally, including who it is for and when it is due."),
+            label="form guidance",
         )
         return
 
@@ -484,7 +605,6 @@ async def handle_stateful_conversation(ctx: ActivityContext[MessageActivity]) ->
 
     _increment_turns_before_card(ctx.activity.conversation.id)
     overrides = get_mention_overrides(ctx.activity.conversation.id)
-    actor_ref = sender_user_ref(ctx.activity)
     actor = await enrich_actor(actor_ref, graph_search)
     mention_result = await resolve_mentions_structured(
         ctx.activity,
@@ -497,7 +617,6 @@ async def handle_stateful_conversation(ctx: ActivityContext[MessageActivity]) ->
             ctx,
             mention_result.ambiguous[0],
             original_message=text,
-            source="message",
         )
         return
 
@@ -508,6 +627,7 @@ async def handle_stateful_conversation(ctx: ActivityContext[MessageActivity]) ->
         mention_overrides=overrides,
         actor=actor,
         mention_result=mention_result,
+        interaction_revision=interaction_revision,
     )
 
     logger.info("Stateful conversation completed: activity_id=%s", ctx.activity.id)
@@ -537,6 +657,11 @@ async def handle_card_action(
     verb = cast(str | None, action.verb or merged.get("verb"))
     uid = sender_user_ref(ctx.activity).entra_object_id
     ref_id = merged.get("draft_id") or merged.get("task_id")
+    response_coordinator = ResponseCoordinator()
+    receipt_key = response_coordinator.action_key(
+        action_token=str(merged.get("action_token") or ""),
+        activity_id=ctx.activity.id or "", actor_id=uid,
+        verb=verb or "", reference_id=str(ref_id or ""))
     logger.info(
         "Card action received: activity_id=%s verb=%s ref=%s user=%s",
         ctx.activity.id,
@@ -561,6 +686,7 @@ async def handle_card_action(
             msg[:200],
             card is not None,
         )
+        response_coordinator.complete(receipt_key, code=outcome, text=msg)
         try:
             if card is not None:
                 await ctx.send(MessageActivityInput().add_card(card))
@@ -569,6 +695,30 @@ async def handle_card_action(
         except Exception:  # noqa: BLE001
             logger.exception("Card action follow-up ctx.send failed")
         return InvokeResponse(status=200, body=AdaptiveCardActionMessageResponse(value=msg or "OK"))
+
+    claimed, stored = response_coordinator.claim(receipt_key)
+    if not claimed:
+        assert stored is not None
+        return InvokeResponse(status=200, body=AdaptiveCardActionMessageResponse(value=stored.text))
+
+    interaction_store = InteractionStore()
+    card_revision = interaction_store.begin_event(
+        actor_id=uid, conversation_id=ctx.activity.conversation.id,
+        activity_id=ctx.activity.id or "")
+    set_interaction_revision(card_revision)
+    if verb in {"task.close", "task.reject"} and ref_id:
+        operation = (InteractionOperation.CLOSE_TASK if verb == "task.close"
+                     else InteractionOperation.REOPEN_TASK)
+        stored = interaction_store.set_pending(
+            actor_id=uid, conversation_id=ctx.activity.conversation.id,
+            operation=operation, slots={},
+            missing_fields=["completion notes" if verb == "task.close" else "reason"],
+            reference_id=str(ref_id), expected_revision=card_revision)
+        if stored is None and interaction_store.enabled():
+            return await respond("A newer interaction superseded this action.", outcome="stale_action")
+        prompt = ("Tell me the completion notes in your next message."
+                  if verb == "task.close" else "Tell me the reason for reopening in your next message.")
+        return await respond(prompt, outcome="pending_details")
 
     dispatched = await dispatch_card_action(verb, merged, sender_user_ref(ctx.activity))
     if dispatched.handled:
@@ -588,62 +738,26 @@ async def handle_card_action(
                 description=task.description,
             )
             return await respond("", outcome="task_found", card=card)
+        if result.code == "TASK_CREATED" and result.value is not None:
+            interaction_store.clear(actor_id=uid, conversation_id=ctx.activity.conversation.id)
+            task = result.value
+            card = task_assignment_card(
+                task_id=task.id, task_type=task.task_type, description=task.description,
+                due=str(task.due_date), priority=str(task.priority),
+                created_by_name=task.created_by.display_name or task.created_by.entra_object_id)
+            return await respond(result.message, outcome="task_created", card=card)
+        if result.code == "DRAFT_CANCELLED":
+            interaction_store.clear(actor_id=uid, conversation_id=ctx.activity.conversation.id)
         return await respond(result.message, outcome=result.code.lower())
-
-    if verb == "manual_create_submit":
-        try:
-            settings = get_settings()
-            requester = sender_user_ref(ctx.activity)
-            assignee_name = str(merged.get("assignee_name") or "").strip()
-            if not assignee_name:
-                return await respond("Assignee name is required.", outcome="validation_error")
-
-            if not graph_configured(settings):
-                return await respond(
-                    "Directory search is unavailable. Configure Graph permissions or use natural language with @mentions.",
-                    outcome="graph_unavailable",
-                )
-
-            async def graph_search(query: str) -> list[dict[str, Any]]:
-                return await GraphClient(settings).search_users(query)
-
-            actor = await enrich_actor(requester, graph_search)
-            pick = await resolve_assignee_name(assignee_name, graph_search, requester=actor)
-            form_fields = dict(merged)
-
-            if pick.resolved is None:
-                if not pick.ranked_candidates:
-                    return await respond(
-                        f"No directory matches for {assignee_name!r}. Check the name and try again.",
-                        outcome="not_found",
-                    )
-                ambiguity = AmbiguousMentionResolution(
-                    token=f"@{assignee_name}",
-                    query=assignee_name,
-                    candidates=pick.ranked_candidates,
-                )
-                await _send_disambiguation_intercept(
-                    ctx,
-                    ambiguity,
-                    original_message="",
-                    source="manual_form",
-                    manual_form_fields=form_fields,
-                )
-                return await respond("Multiple matches found — choose the assignee above.", outcome="ambiguous")
-
-            draft = build_manual_draft(form_fields, pick.resolved)
-            denial = await _send_confirm_draft_card(ctx, draft, assignee=pick.resolved)
-            if denial:
-                return await respond(denial, outcome="denied")
-            return await respond("Review and confirm the task card.", outcome="draft_prepared")
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Manual create failed")
-            return await respond(f"Validation error: {exc}", outcome="validation_error")
 
     if verb == "pick_assignee":
         pick_id = str(merged.get("pick_id") or "")
         selected_id = str(merged.get("assignee_entra_id") or "").strip()
-        pending = take_pending_disambiguation(pick_id) if pick_id else None
+        pending = take_pending_disambiguation(
+            pick_id,
+            actor_id=uid,
+            conversation_id=ctx.activity.conversation.id,
+        ) if pick_id else None
         if pending is None or not selected_id:
             return await respond("Selection expired or missing. Send your request again.", outcome="expired")
 
@@ -656,14 +770,8 @@ async def handle_card_action(
 
         set_mention_override(pending.conversation_id, pending.token, selected)
 
-        if pending.source == "manual_form":
-            draft = build_manual_draft(pending.manual_form_fields, selected)
-            denial = await _send_confirm_draft_card(ctx, draft, assignee=selected)
-            if denial:
-                return await respond(denial, outcome="denied")
-            return await respond("Review and confirm the task card.", outcome="draft_prepared")
-
         set_turn_context(conversation_id=pending.conversation_id, actor=sender_user_ref(ctx.activity))
+        set_interaction_revision(card_revision)
         memory = get_or_create_memory(pending.conversation_id)
         settings = get_settings()
 
@@ -694,7 +802,6 @@ async def handle_card_action(
                 ctx,
                 mention_result.ambiguous[0],
                 original_message=pending.original_message,
-                source="message",
             )
             return await respond("Another assignee still needs selection.", outcome="ambiguous")
 
@@ -705,9 +812,14 @@ async def handle_card_action(
             mention_overrides=overrides,
             actor=actor,
             mention_result=mention_result,
+            interaction_revision=card_revision,
         )
         clear_mention_overrides(pending.conversation_id)
-        return await respond("Continuing with your selected assignee.", outcome="continued")
+        response_coordinator.complete(receipt_key, code="continued", text="Assignee selected.")
+        return InvokeResponse(
+            status=200,
+            body=AdaptiveCardActionMessageResponse(value="Assignee selected."),
+        )
 
     return await respond("Unknown card action.", outcome="unknown_verb")
 

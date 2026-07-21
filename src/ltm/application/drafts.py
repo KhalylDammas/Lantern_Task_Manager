@@ -6,10 +6,18 @@ import asyncio
 import logging
 
 from ltm.application.results import UseCaseResult
-from ltm.bot.drafts import DraftAccessError, discard_draft, take_draft
+from ltm.bot.drafts import (
+    DraftAccessError,
+    completed_draft_task_id,
+    discard_draft,
+    peek_draft,
+    record_draft_task_id,
+    take_draft_in_session,
+)
 from ltm.config.settings import get_settings
 from ltm.domain.models import TaskRecord, UserRef
 from ltm.notifications.service import NotificationService
+from ltm.interaction.models import InteractionOrigin
 from ltm.policy import AssignmentPolicyError, assert_assignee_department_matches, assert_can_assign
 from ltm.storage.db import session_scope
 from ltm.storage.repository import TaskRepository
@@ -18,12 +26,24 @@ logger = logging.getLogger(__name__)
 
 
 class DraftUseCases:
-    async def confirm(self, draft_id: str, actor: UserRef) -> UseCaseResult[TaskRecord]:
+    async def confirm(self, draft_id: str, actor: UserRef,
+                      origin: InteractionOrigin | None = None) -> UseCaseResult[TaskRecord]:
         try:
-            draft = take_draft(draft_id, actor.entra_object_id)
+            draft = peek_draft(draft_id, actor.entra_object_id)
         except DraftAccessError as exc:
             return UseCaseResult.failure(code="NOT_DRAFT_REQUESTER", message=str(exc))
         if draft is None:
+            try:
+                completed_task_id = completed_draft_task_id(draft_id, actor.entra_object_id)
+            except DraftAccessError as exc:
+                return UseCaseResult.failure(code="NOT_DRAFT_REQUESTER", message=str(exc))
+            if completed_task_id:
+                with session_scope() as session:
+                    completed_task = TaskRepository(session).get(completed_task_id)
+                if completed_task is not None:
+                    return UseCaseResult.success(
+                        completed_task, code="TASK_CREATED",
+                        message=f"Task created: {completed_task.id}")
             return UseCaseResult.failure(code="DRAFT_EXPIRED", message="Draft expired or already confirmed.")
 
         try:
@@ -38,13 +58,22 @@ class DraftUseCases:
         except AssignmentPolicyError as exc:
             return UseCaseResult.failure(code="ASSIGNMENT_DENIED", message=exc.user_message)
 
-        with session_scope() as session:
-            task = TaskRepository(session).create_from_draft(draft, actor)
+        try:
+            with session_scope() as session:
+                claimed = take_draft_in_session(session, draft_id, actor.entra_object_id)
+                if claimed is None:
+                    return UseCaseResult.failure(
+                        code="DRAFT_EXPIRED", message="Draft expired or already confirmed.")
+                task = TaskRepository(session).create_from_draft(claimed, actor)
+                record_draft_task_id(session, draft_id, task.id)
+        except DraftAccessError as exc:
+            return UseCaseResult.failure(code="NOT_DRAFT_REQUESTER", message=str(exc))
 
         result = UseCaseResult.success(task, code="TASK_CREATED", message=f"Task created: {task.id}")
         def notify() -> None:
             with session_scope() as session:
-                NotificationService(session, get_settings()).notify_task_assigned(task)
+                NotificationService(session, get_settings()).notify_task_assigned(
+                    task, origin=origin or InteractionOrigin(actor_entra_id=actor.entra_object_id))
 
         try:
             await asyncio.to_thread(notify)

@@ -57,3 +57,38 @@ def test_close_recovers_when_acknowledgement_was_missed():
             AuditEvent.CLOSURE_REQUESTED,
         ]
         assert closed.audit_trail[-2].details == "Implicit acknowledgement on close"
+
+
+def test_triple_role_self_close_is_atomic_and_terminal():
+    actor = UserRef(entra_object_id="self-user", display_name="Self User", department="IT")
+    draft = TaskCreateDraft(
+        task_type="Self review",
+        description="Review the complete workflow",
+        assignee_entra_id=actor.entra_object_id,
+        assignee_display_name=actor.display_name,
+        assignee_department=actor.department,
+        assignee_department_code=DeptCode.IT,
+        priority=Priority.MEDIUM,
+        due_date=date.today() + timedelta(days=1),
+    )
+    with session_scope() as session:
+        repo = TaskRepository(session)
+        assigned = repo.create_from_draft(draft, actor)
+        verified = repo.close_and_verify_self(
+            CloseTaskParams(task_id=assigned.id, completion_notes="Reviewed and complete"),
+            actor.entra_object_id,
+        )
+        assert verified.status == TaskStatus.VERIFIED
+        assert verified.closed_at is not None
+        assert verified.verified_at is not None
+        assert [entry.event for entry in verified.audit_trail[-3:]] == [
+            AuditEvent.ACKNOWLEDGED,
+            AuditEvent.CLOSURE_REQUESTED,
+            AuditEvent.VERIFIED,
+        ]
+        try:
+            repo.manager_reject(verified.id, actor.entra_object_id, "Too late")
+        except ValueError as exc:
+            assert "not pending verification" in str(exc)
+        else:
+            raise AssertionError("VERIFIED tasks must not reopen")

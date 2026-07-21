@@ -271,6 +271,7 @@ class TaskRepository:
             )
 
         row.closure_notes = params.completion_notes
+        row.closed_at = _now()
         self._transition(
             row,
             target=TaskStatus.PENDING_VERIFICATION,
@@ -278,6 +279,36 @@ class TaskRepository:
             audit_event=AuditEvent.CLOSURE_REQUESTED.value,
             details=params.completion_notes,
         )
+        self.s.flush()
+        return _orm_to_record(row)
+
+    def close_and_verify_self(self, params: CloseTaskParams, actor_entra_id: str) -> TaskRecord:
+        """Atomically close and verify a task when all lifecycle roles are the actor."""
+        row = self.s.get(TaskORM, params.task_id)
+        if not row:
+            raise ValueError("Task not found")
+        if row.assigned_to_entra_id != actor_entra_id or row.created_by_entra_id != actor_entra_id:
+            raise ValueError("Self-verification requires the creator and assignee to be the actor")
+        if row.status == TaskStatus.ASSIGNED.value:
+            self._transition(row, target=TaskStatus.IN_PROGRESS, actor_entra_id=actor_entra_id,
+                             audit_event=AuditEvent.ACKNOWLEDGED.value,
+                             details="Implicit acknowledgement on close")
+        if row.status not in {TaskStatus.IN_PROGRESS.value, TaskStatus.REOPENED.value}:
+            raise ValueError(f"Cannot close task from {row.status}")
+        now = _now()
+        row.closure_notes = params.completion_notes
+        row.closed_at = now
+        audits = list(row.audit_trail or [])
+        audits.extend([
+            {"event": AuditEvent.CLOSURE_REQUESTED.value, "actor_entra_id": actor_entra_id,
+             "at": now.isoformat(), "details": params.completion_notes[:1000]},
+            {"event": AuditEvent.VERIFIED.value, "actor_entra_id": actor_entra_id,
+             "at": now.isoformat(), "details": "Automatic triple-role verification"},
+        ])
+        row.audit_trail = audits
+        row.status = TaskStatus.VERIFIED.value
+        row.verified_at = now
+        row.updated_at = now
         self.s.flush()
         return _orm_to_record(row)
 

@@ -9,6 +9,7 @@ from typing import Any, Awaitable, Callable
 from ltm.config.settings import get_settings
 from ltm.domain.enums import DEPT_DISPLAY, DeptCode
 from ltm.domain.models import UserRef
+from ltm.interaction.normalization import normalize_routing_text
 
 _AT_TAG_RE = re.compile(r"</?at>", re.IGNORECASE)
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -76,7 +77,7 @@ class MentionResolutionResult:
 
 def normalize_activity_text(text: str) -> str:
     """Strip Teams markup and collapse whitespace from inbound activity text."""
-    return _normalize_text(text)
+    return normalize_routing_text(_normalize_text(text))
 
 
 def department_code(department: str) -> str:

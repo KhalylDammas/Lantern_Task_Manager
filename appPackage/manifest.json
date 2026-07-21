@@ -42,10 +42,6 @@
                             "description": "List tasks assigned to me."
                         },
                         {
-                            "title": "create task form",
-                            "description": "Open the structured Adaptive Card capture form."
-                        },
-                        {
                             "title": "list pending verification",
                             "description": "Show tasks awaiting manager verification (when permitted)."
                         }
