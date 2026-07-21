@@ -62,11 +62,13 @@ class LLMUsageRepository:
         prompt_tokens: int = 0,
         completion_tokens: int = 0,
         outcome: UsageOutcome = "success",
+        request_count: int = 1,
         usage_date: date | None = None,
     ) -> None:
         target = usage_date or self._today()
         fallback_inc = 1 if outcome == "fallback" else 0
         error_inc = 1 if outcome == "error" else 0
+        request_count = max(1, request_count)
         with session_scope() as session:
             row = session.scalar(
                 select(LlmUsageDaily).where(
@@ -81,7 +83,7 @@ class LLMUsageRepository:
                         usage_date=target,
                         provider=provider,
                         model_id=model_id,
-                        request_count=1,
+                        request_count=request_count,
                         prompt_tokens=max(0, prompt_tokens),
                         completion_tokens=max(0, completion_tokens),
                         fallback_count=fallback_inc,
@@ -89,7 +91,7 @@ class LLMUsageRepository:
                     )
                 )
                 return
-            row.request_count += 1
+            row.request_count += request_count
             row.prompt_tokens += max(0, prompt_tokens)
             row.completion_tokens += max(0, completion_tokens)
             row.fallback_count += fallback_inc

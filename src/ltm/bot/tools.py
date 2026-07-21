@@ -11,12 +11,12 @@ from pydantic import BaseModel, Field, field_validator
 from microsoft_teams.ai import Function
 
 from ltm.application import DraftUseCases, TaskUseCases, UseCaseResult
-from ltm.bot.context import get_actor, push_pending_card
+from ltm.bot.context import get_actor, push_pending_card, set_terminal_response
 from ltm.bot.d365_tools import build_d365_functions
 from ltm.policy import AssignmentPolicyError, assert_assignee_department_matches, assert_can_assign, tool_error
 from ltm.bot.drafts import stash_draft
 from ltm.bot.commands import format_task_list_message
-from ltm.cards.builders import draft_confirm_card
+from ltm.cards.builders import draft_confirm_card, task_detail_card
 from ltm.domain.enums import DeptCode, Priority
 from ltm.domain.models import (
     AcknowledgeTaskParams,
@@ -78,6 +78,7 @@ async def create_task_handler(params: CreateTaskToolParams) -> str:
             type(exc).__name__,
             exc.user_message,
         )
+        set_terminal_response(exc.user_message)
         return exc.user_message
 
     d365 = D365References(
@@ -111,10 +112,12 @@ async def create_task_handler(params: CreateTaskToolParams) -> str:
         assignee_department=draft.assignee_department or draft.assignee_department_code.value,
     )
     push_pending_card(card)
-    return (
+    result = (
         f"Draft {draft_id} prepared. A confirmation card will be shown in Teams. "
         f"Assignee {draft.assignee_display_name or draft.assignee_entra_id}, due {draft.due_date}."
     )
+    set_terminal_response(result)
+    return result
 
 
 class EmptyParams(BaseModel):
@@ -126,64 +129,100 @@ class EmptyParams(BaseModel):
 async def list_tasks_handler(params: ListTasksParams) -> str:
     actor = get_actor()
     result = TaskUseCases().list_tasks(params, actor)
-    return format_task_list_message(tasks=result.value or [], variant=params.filter)
+    response = format_task_list_message(tasks=result.value or [], variant=params.filter)
+    set_terminal_response(response)
+    return response
 
 
 def _task_result_json(result: UseCaseResult[Any]) -> str:
-    if not result.ok:
-        return tool_error(result.code, result.message)
-    value = result.value
-    if isinstance(value, list):
-        payload: Any = [item.model_dump(mode="json") for item in value]
-    elif hasattr(value, "model_dump"):
-        payload = value.model_dump(mode="json")
-    else:
-        payload = value
+    """Compact tool-memory result; presentation is handled deterministically."""
     return json.dumps(
-        {"ok": True, "code": result.code, "message": result.message, "value": payload, "warnings": result.warnings},
+        {
+            "ok": result.ok,
+            "code": result.code,
+            "message": result.message,
+            "warnings": list(result.warnings),
+        },
         default=str,
     )
 
 
+def _terminal_task_result(result: UseCaseResult[Any]) -> str:
+    message = result.message
+    if result.warnings:
+        message = f"{message} {' '.join(result.warnings)}"
+    set_terminal_response(message)
+    return _task_result_json(result)
+
+
+def _push_task_detail(task: Any) -> None:
+    push_pending_card(
+        task_detail_card(
+            task_id=task.id,
+            task_type=task.task_type,
+            status=str(task.status),
+            due=str(task.due_date),
+            priority=str(task.priority),
+            assignee_name=task.assigned_to.display_name or task.assigned_to.entra_object_id,
+            created_by_name=task.created_by.display_name or task.created_by.entra_object_id,
+            description=task.description,
+        )
+    )
+
+
+def _terminal_task_lookup(result: UseCaseResult[Any]) -> str:
+    if not result.ok:
+        return _terminal_task_result(result)
+    if isinstance(result.value, list):
+        response = format_task_list_message(tasks=result.value, variant="department")
+    else:
+        _push_task_detail(result.value)
+        response = result.message
+    set_terminal_response(response)
+    return json.dumps({"ok": True, "code": result.code, "message": response})
+
+
 async def acknowledge_task_handler(params: AcknowledgeTaskParams) -> str:
     actor = get_actor()
-    return _task_result_json(TaskUseCases().acknowledge(params.task_id, actor))
+    return _terminal_task_result(TaskUseCases().acknowledge(params.task_id, actor))
 
 
 async def confirm_task_draft_handler(params: DraftActionParams) -> str:
-    return _task_result_json(await DraftUseCases().confirm(params.draft_id, get_actor()))
+    return _terminal_task_result(await DraftUseCases().confirm(params.draft_id, get_actor()))
 
 
 async def cancel_task_draft_handler(params: DraftActionParams) -> str:
-    return _task_result_json(DraftUseCases().cancel(params.draft_id, get_actor()))
+    return _terminal_task_result(DraftUseCases().cancel(params.draft_id, get_actor()))
 
 
 async def close_task_handler(params: CloseTaskParams) -> str:
     actor = get_actor()
-    return _task_result_json(await TaskUseCases().close(params, actor))
+    return _terminal_task_result(await TaskUseCases().close(params, actor))
 
 
 async def reopen_task_handler(params: ReopenTaskParams) -> str:
     actor = get_actor()
-    return _task_result_json(await TaskUseCases().reopen(params.task_id, params.reason, actor))
+    return _terminal_task_result(await TaskUseCases().reopen(params.task_id, params.reason, actor))
 
 
 async def verify_task_handler(params: VerifyTaskParams) -> str:
-    return _task_result_json(await TaskUseCases().verify(params.task_id, get_actor()))
+    return _terminal_task_result(await TaskUseCases().verify(params.task_id, get_actor()))
 
 
 async def resume_task_handler(params: ResumeTaskParams) -> str:
     actor = get_actor()
-    return _task_result_json(TaskUseCases().resume(params.task_id, actor))
+    return _terminal_task_result(TaskUseCases().resume(params.task_id, actor))
 
 
 async def get_task_handler(params: GetTaskParams) -> str:
     actor = get_actor()
     if params.task_id:
-        return _task_result_json(TaskUseCases().get_task(params.task_id, actor))
+        return _terminal_task_lookup(TaskUseCases().get_task(params.task_id, actor))
     if params.query:
-        return _task_result_json(TaskUseCases().search_tasks(params.query, actor))
-    return tool_error("TASK_ID_OR_QUERY_REQUIRED", "Provide a task id or search query.")
+        return _terminal_task_lookup(TaskUseCases().search_tasks(params.query, actor))
+    message = "Provide a task id or search query."
+    set_terminal_response(message)
+    return tool_error("TASK_ID_OR_QUERY_REQUIRED", message)
 
 
 def build_functions() -> list[Function[Any]]:

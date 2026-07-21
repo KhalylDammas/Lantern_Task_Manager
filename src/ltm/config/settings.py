@@ -86,6 +86,9 @@ class Settings(BaseSettings):
     llm_governor_max_wait_seconds: float = Field(default=30.0, alias="LLM_GOVERNOR_MAX_WAIT_SECONDS")
     llm_memory_max_turns: int = Field(default=4, alias="LLM_MEMORY_MAX_TURNS")
     llm_memory_max_tool_result_chars: int = Field(default=6000, alias="LLM_MEMORY_MAX_TOOL_RESULT_CHARS")
+    llm_memory_max_chars: int = Field(default=12000, alias="LLM_MEMORY_MAX_CHARS")
+    llm_terminal_responses_enabled: bool = Field(default=True, alias="LLM_TERMINAL_RESPONSES_ENABLED")
+    llm_dynamic_tools_enabled: bool = Field(default=True, alias="LLM_DYNAMIC_TOOLS_ENABLED")
 
     d365_environment_url: str = Field(default="", alias="D365_ENVIRONMENT_URL")
     d365_tenant_id: str = Field(default="", alias="D365_TENANT_ID")

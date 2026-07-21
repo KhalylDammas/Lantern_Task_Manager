@@ -12,12 +12,14 @@ from ltm.domain.models import UserRef
 conversation_id_var: ContextVar[Optional[str]] = ContextVar("conversation_id", default=None)
 actor_var: ContextVar[Optional[UserRef]] = ContextVar("actor", default=None)
 _pending_cards: ContextVar[Optional[list[AdaptiveCard]]] = ContextVar("pending_cards", default=None)
+_terminal_response: ContextVar[Optional[str]] = ContextVar("terminal_response", default=None)
 
 
 def set_turn_context(*, conversation_id: str, actor: UserRef) -> None:
     conversation_id_var.set(conversation_id)
     actor_var.set(actor)
     _pending_cards.set([])
+    _terminal_response.set(None)
 
 
 def get_actor() -> UserRef:
@@ -39,3 +41,19 @@ def drain_pending_cards() -> list[AdaptiveCard]:
     cur = _pending_cards.get()
     _pending_cards.set([])
     return cur or []
+
+
+def set_terminal_response(message: str) -> None:
+    """Provide a complete tool response that does not need model paraphrasing."""
+    from ltm.config.settings import get_settings
+
+    if not get_settings().llm_terminal_responses_enabled:
+        return
+    _terminal_response.set(message)
+
+
+def take_terminal_response() -> str | None:
+    """Consume the current turn's terminal response, if one was produced."""
+    message = _terminal_response.get()
+    _terminal_response.set(None)
+    return message

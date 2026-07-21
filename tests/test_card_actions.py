@@ -56,6 +56,11 @@ async def test_close_card_has_chat_parity_and_recovers_missed_acknowledgement(mo
         lambda *args, **kwargs: None,
     )
 
+    async def run_inline(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr("ltm.application.tasks.asyncio.to_thread", run_inline)
+
     dispatched = await dispatch_card_action(
         "task.close",
         {"task_id": task_id, "completion_notes": "Completed from the assignment card"},

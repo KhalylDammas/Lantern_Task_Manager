@@ -42,18 +42,28 @@ def trim_messages(
     *,
     max_turns: int,
     max_tool_result_chars: int = 0,
+    max_chars: int = 0,
 ) -> list[Message]:
     """Keep the most recent user turns and optionally cap tool-result size."""
-    if max_turns <= 0:
+    if max_turns <= 0 and max_chars <= 0:
         return list(messages)
 
     turns = _split_into_turns(messages)
-    kept_turns = turns[-max_turns:] if len(turns) > max_turns else turns
+    kept_turns = turns[-max_turns:] if max_turns > 0 and len(turns) > max_turns else turns
     trimmed: list[Message] = []
     for turn in kept_turns:
         for message in turn:
             trimmed.append(_truncate_tool_result(message, max_chars=max_tool_result_chars))
+    if max_chars > 0:
+        bounded_turns = _split_into_turns(trimmed)
+        while len(bounded_turns) > 1 and _content_chars(bounded_turns) > max_chars:
+            bounded_turns.pop(0)
+        trimmed = [message for turn in bounded_turns for message in turn]
     return trimmed
+
+
+def _content_chars(turns: list[list[Message]]) -> int:
+    return sum(len(str(message.content or "")) for turn in turns for message in turn)
 
 
 async def trim_conversation_memory(
@@ -61,6 +71,7 @@ async def trim_conversation_memory(
     *,
     max_turns: int,
     max_tool_result_chars: int = 0,
+    max_chars: int = 0,
 ) -> int:
     """Trim in-place conversation memory; returns number of messages removed."""
     messages = list(await memory.get_all())
@@ -71,6 +82,7 @@ async def trim_conversation_memory(
         messages,
         max_turns=max_turns,
         max_tool_result_chars=max_tool_result_chars,
+        max_chars=max_chars,
     )
     removed = len(messages) - len(trimmed)
     if removed <= 0 and trimmed == messages:

@@ -25,6 +25,7 @@ from ltm.ai.memory_trim import trim_conversation_memory
 from ltm.ai.model_factory import build_ai_model
 from ltm.ai.redaction import redact
 from ltm.ai.turn_payload import ActorContext, build_turn_payload, enrich_actor, serialize_turn_payload
+from ltm.ai.tool_selection import select_tools_for_message
 from ltm.bot.commands import fetch_task_list, format_task_list_message, match_list_filter
 from ltm.bot.app_factory import create_teams_app
 from ltm.bot.card_actions import dispatch_card_action
@@ -237,7 +238,6 @@ async def run_ai_turn(
 ) -> None:
     model = ai_model()
     settings = get_settings()
-    chat_prompt = ChatPrompt(model, functions=chat_tool_functions())
     tool_profile = settings.llm_tool_profile
     turn_payload = await build_turn_payload(
         ctx.activity,
@@ -248,15 +248,23 @@ async def run_ai_turn(
         actor=actor,
     )
     llm_input = serialize_turn_payload(turn_payload)
+    available_tools = chat_tool_functions()
+    selected_tools = (
+        select_tools_for_message(available_tools, turn_payload.message)
+        if settings.llm_dynamic_tools_enabled
+        else available_tools
+    )
+    chat_prompt = ChatPrompt(model, functions=selected_tools)
     removed_messages = await trim_conversation_memory(
         memory,
         max_turns=settings.llm_memory_max_turns,
         max_tool_result_chars=settings.llm_memory_max_tool_result_chars,
+        max_chars=settings.llm_memory_max_chars,
     )
     logger.info(
         "Sending message to AI model: activity_id=%s conversation_id=%s model=%s "
         "schema_version=%s actor_entra_id=%s enrichments=%s input_length=%s "
-        "memory_trimmed_messages=%s message_preview=%r",
+        "memory_trimmed_messages=%s available_tools=%s selected_tools=%s message_preview=%r",
         ctx.activity.id,
         ctx.activity.conversation.id,
         model.__class__.__name__,
@@ -265,6 +273,8 @@ async def run_ai_turn(
         turn_payload.enrichments is not None,
         len(llm_input),
         removed_messages,
+        len(available_tools),
+        [tool.name for tool in selected_tools],
         text_preview(turn_payload.message),
     )
 

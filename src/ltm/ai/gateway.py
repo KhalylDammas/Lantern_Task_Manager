@@ -16,7 +16,7 @@ from tenacity import AsyncRetrying, retry_if_exception, stop_after_attempt, wait
 from ltm.ai.circuit_breaker import CircuitBreaker, LLMCircuitOpenError
 from ltm.ai.governor import LLMDailyCapExceededError, LLMGovernor, LLMRateLimitError
 from ltm.ai.groq_completions_model import GroqOpenAICompletionsAIModel
-from ltm.ai.groq_metrics import clear_call_metrics, get_call_metrics
+from ltm.ai.groq_metrics import begin_turn, clear_call_metrics, get_call_metrics, get_call_records
 from ltm.config.settings import Settings
 from ltm.ai.groq_rate_limit import parse_groq_retry_seconds
 from ltm.storage.llm_usage import LLMUsageRepository, UsageOutcome
@@ -61,6 +61,8 @@ def _groq_error_text(exc: BaseException) -> str:
 
 
 def _is_retryable_error(exc: BaseException) -> bool:
+    if isinstance(exc, LLMRateLimitError):
+        return False
     if isinstance(exc, (APITimeoutError, APIConnectionError, asyncio.TimeoutError)):
         return True
     retryable_status = {413, 429, 502, 503, 504}
@@ -113,13 +115,16 @@ def build_resilient_groq_model(settings: Settings) -> ResilientGroqModel:
     api_key = settings.effective_groq_api_key()
     if not api_key:
         raise ValueError("GROQ_API_KEY is required when LLM_PRIMARY=groq")
+    governor = get_llm_governor(settings)
     primary = _build_groq_model(settings, settings.groq_model, api_key)
     fallback = _build_groq_model(settings, settings.groq_fallback_model, api_key)
+    primary.set_before_provider_call(governor.acquire)
+    fallback.set_before_provider_call(governor.acquire)
     return ResilientGroqModel(
         settings=settings,
         primary=primary,
         fallback=fallback,
-        governor=get_llm_governor(settings),
+        governor=governor,
         breaker=get_llm_circuit_breaker(settings),
     )
 
@@ -180,19 +185,11 @@ class ResilientGroqModel(AIModel):
         functions: dict[str, Function[BaseModel]] | None = None,
         on_chunk: Callable[[str], Awaitable[None]] | None = None,
     ) -> ModelMessage:
+        begin_turn()
         try:
             self.breaker.ensure_closed_or_half_open()
         except LLMCircuitOpenError:
             self._log_call(outcome="circuit_open", model=self.primary_model_id)
-            raise
-
-        try:
-            await self.governor.acquire()
-        except LLMDailyCapExceededError as exc:
-            self._log_call(outcome="daily_cap", model=self.primary_model_id, error=str(exc))
-            raise
-        except LLMRateLimitError as exc:
-            self._log_call(outcome="rate_limit", model=self.primary_model_id, error=str(exc))
             raise
 
         try:
@@ -208,6 +205,9 @@ class ResilientGroqModel(AIModel):
             prompt_tokens = metrics.prompt_tokens if metrics else 0
             completion_tokens = metrics.completion_tokens if metrics else 0
             latency_ms = metrics.latency_ms if metrics else 0.0
+            call_records = get_call_records()
+            provider_calls = len(call_records)
+            tool_result_calls = sum(call.stage == "tool_result" for call in call_records)
             model_id = self.fallback_model_id if used_fallback else self.primary_model_id
             outcome: LLMCallOutcome = "fallback" if used_fallback else "success"
             self.governor.record_token_usage(prompt_tokens, completion_tokens)
@@ -217,15 +217,26 @@ class ResilientGroqModel(AIModel):
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 latency_ms=latency_ms,
+                provider_calls=provider_calls,
+                tool_result_calls=tool_result_calls,
             )
             self._schedule_usage_record(
                 model_id=model_id,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 outcome="fallback" if used_fallback else "success",
+                request_count=provider_calls,
             )
             clear_call_metrics()
             return result
+        except LLMDailyCapExceededError as exc:
+            self._log_call(outcome="daily_cap", model=self.primary_model_id, error=str(exc))
+            clear_call_metrics()
+            raise
+        except LLMRateLimitError as exc:
+            self._log_call(outcome="rate_limit", model=self.primary_model_id, error=str(exc))
+            clear_call_metrics()
+            raise
         except Exception as exc:
             self.breaker.record_failure()
             self._log_call(outcome="error", model=self.primary_model_id, error=str(exc))
@@ -266,10 +277,6 @@ class ResilientGroqModel(AIModel):
             last_error,
             self.fallback_model_id,
         )
-        try:
-            await self.governor.acquire()
-        except (LLMDailyCapExceededError, LLMRateLimitError):
-            raise
         result = await self._call_once(
             self.fallback,
             input,
@@ -344,16 +351,21 @@ class ResilientGroqModel(AIModel):
         prompt_tokens: int = 0,
         completion_tokens: int = 0,
         latency_ms: float = 0.0,
+        provider_calls: int = 0,
+        tool_result_calls: int = 0,
         error: str = "",
     ) -> None:
         logger.info(
             "llm_call provider=groq model=%s outcome=%s latency_ms=%.1f "
-            "prompt_tokens=%s completion_tokens=%s error=%s",
+            "prompt_tokens=%s completion_tokens=%s provider_calls=%s "
+            "tool_result_calls=%s error=%s",
             model,
             outcome,
             latency_ms,
             prompt_tokens,
             completion_tokens,
+            provider_calls,
+            tool_result_calls,
             error[:200] if error else "",
         )
 
@@ -364,6 +376,7 @@ class ResilientGroqModel(AIModel):
         prompt_tokens: int = 0,
         completion_tokens: int = 0,
         outcome: UsageOutcome = "success",
+        request_count: int = 1,
     ) -> None:
         try:
             loop = asyncio.get_running_loop()
@@ -379,6 +392,7 @@ class ResilientGroqModel(AIModel):
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
                     outcome=outcome,
+                    request_count=request_count,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Failed to record LLM usage: %s", exc)

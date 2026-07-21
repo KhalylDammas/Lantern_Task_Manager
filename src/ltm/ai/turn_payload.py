@@ -259,6 +259,11 @@ async def build_turn_payload(
 
 def serialize_turn_payload(payload: TurnPayload) -> str:
     data = payload.model_dump(mode="json", exclude_none=True)
+    # Transport correlation and conversation delivery fields are logged by the host;
+    # the model only needs actor, capability, message, and enrichment context.
+    data.pop("turn", None)
+    data.pop("conversation", None)
+    data["actor"] = {key: value for key, value in data["actor"].items() if value != ""}
     if payload.enrichments is not None:
         enrichments = data.get("enrichments", {})
         if not enrichments.get("task_references"):
@@ -273,4 +278,4 @@ def serialize_turn_payload(payload: TurnPayload) -> str:
                 enrichments.pop("mentions", None)
         if not enrichments:
             data.pop("enrichments", None)
-    return json.dumps(data, ensure_ascii=False)
+    return json.dumps(data, ensure_ascii=False, separators=(",", ":"))

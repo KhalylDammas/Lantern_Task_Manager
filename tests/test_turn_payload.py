@@ -121,6 +121,8 @@ async def test_build_turn_payload_plain_message_without_enrichments() -> None:
     assert data["actor"]["display_name"] == "Requester User"
     assert data["capabilities"]["graph_enabled"] is False
     assert data["capabilities"]["tool_profile"] == "full"
+    assert "turn" not in data
+    assert "conversation" not in data
     assert "enrichments" not in data
 
 

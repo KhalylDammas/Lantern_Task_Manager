@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from ltm.ai.groq_metrics import begin_call, get_call_metrics
+from ltm.ai.groq_metrics import begin_call
+from ltm.bot.context import take_terminal_response
 
 from microsoft_teams.ai import (
     Function,
@@ -20,6 +22,7 @@ from microsoft_teams.ai import (
 )
 from microsoft_teams.openai.completions_model import OpenAICompletionsAIModel
 from openai.types.chat import (
+    ChatCompletion,
     ChatCompletionAssistantMessageParam,
     ChatCompletionMessageFunctionToolCallParam,
     ChatCompletionMessageParam,
@@ -28,6 +31,8 @@ from openai.types.chat import (
     ChatCompletionUserMessageParam,
 )
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 
 class GroqOpenAICompletionsAIModel(OpenAICompletionsAIModel):
@@ -40,20 +45,38 @@ class GroqOpenAICompletionsAIModel(OpenAICompletionsAIModel):
 
         async def _groq_create(*args: Any, **kwargs: Any) -> Any:
             kwargs.setdefault("parallel_tool_calls", False)
-            begin_call()
+            messages = kwargs.get("messages") or ()
+            has_tool_result = any(message.get("role") == "tool" for message in messages)
+            if has_tool_result:
+                terminal = take_terminal_response()
+                if terminal is not None:
+                    logger.info(
+                        "llm_terminal_response provider=groq model=%s external_call_skipped=1",
+                        self._model,
+                    )
+                    return terminal_chat_completion(content=terminal, model=self._model)
+            before_provider_call = getattr(self, "_before_provider_call", None)
+            if before_provider_call is not None:
+                await before_provider_call()
+            stage = "tool_result" if has_tool_result else "initial"
+            metrics = begin_call(stage=stage)
             started = time.perf_counter()
-            response = await orig_create(*args, **kwargs)
-            elapsed_ms = (time.perf_counter() - started) * 1000.0
-            metrics = get_call_metrics()
-            if metrics is not None:
-                metrics.latency_ms = elapsed_ms
+            try:
+                response = await orig_create(*args, **kwargs)
                 usage = getattr(response, "usage", None)
                 if usage is not None:
                     metrics.prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
                     metrics.completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
-            return response
+                return response
+            finally:
+                elapsed_ms = (time.perf_counter() - started) * 1000.0
+                metrics.latency_ms = elapsed_ms
 
         client.chat.completions.create = _groq_create  # type: ignore[method-assign]
+
+    def set_before_provider_call(self, callback: Callable[[], Awaitable[None]]) -> None:
+        """Install governance immediately before each external request."""
+        self._before_provider_call = callback
 
     async def generate_text(
         self,
@@ -96,3 +119,23 @@ class GroqOpenAICompletionsAIModel(OpenAICompletionsAIModel):
                 )
             return ChatCompletionAssistantMessageParam(role="assistant", content=message.content)
         raise Exception(f"Message {message} not supported")
+
+
+def terminal_chat_completion(*, content: str, model: str) -> ChatCompletion:
+    """Create the response shape expected by Teams AI without a provider call."""
+    return ChatCompletion.model_validate(
+        {
+            "id": "ltm-terminal-tool-response",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "logprobs": None,
+                    "message": {"content": content, "role": "assistant"},
+                }
+            ],
+            "created": int(time.time()),
+            "model": model,
+            "object": "chat.completion",
+        }
+    )
