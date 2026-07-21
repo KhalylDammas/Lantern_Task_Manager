@@ -13,6 +13,7 @@ conversation_id_var: ContextVar[Optional[str]] = ContextVar("conversation_id", d
 actor_var: ContextVar[Optional[UserRef]] = ContextVar("actor", default=None)
 _pending_cards: ContextVar[Optional[list[AdaptiveCard]]] = ContextVar("pending_cards", default=None)
 _terminal_response: ContextVar[Optional[str]] = ContextVar("terminal_response", default=None)
+_interaction_revision: ContextVar[Optional[int]] = ContextVar("interaction_revision", default=None)
 
 
 def set_turn_context(*, conversation_id: str, actor: UserRef) -> None:
@@ -20,6 +21,7 @@ def set_turn_context(*, conversation_id: str, actor: UserRef) -> None:
     actor_var.set(actor)
     _pending_cards.set([])
     _terminal_response.set(None)
+    _interaction_revision.set(None)
 
 
 def get_actor() -> UserRef:
@@ -27,6 +29,21 @@ def get_actor() -> UserRef:
     if not a:
         raise RuntimeError("actor not set")
     return a
+
+
+def get_conversation_id() -> str:
+    conversation_id = conversation_id_var.get()
+    if not conversation_id:
+        raise RuntimeError("conversation not set")
+    return conversation_id
+
+
+def set_interaction_revision(revision: int | None) -> None:
+    _interaction_revision.set(revision)
+
+
+def get_interaction_revision() -> int | None:
+    return _interaction_revision.get()
 
 
 def push_pending_card(card: AdaptiveCard) -> None:

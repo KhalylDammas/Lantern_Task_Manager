@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from ltm.bot.help_text import welcome_bot_text
 from ltm.domain.business_time import business_today
 from ltm.domain.models import TaskRecord
+from ltm.interaction.models import InteractionOrigin
 from ltm.bot.commands import format_task_list_message
 from ltm.cards.builders import (
     manager_verification_card,
@@ -79,7 +80,11 @@ class NotificationService:
         send_activity: bool = True,
         send_bot: bool = True,
         skip_idempotency: bool = False,
+        origin: InteractionOrigin | None = None,
     ) -> NotificationResult:
+        if (origin and self._settings.self_notification_activity_only_enabled
+                and recipient_entra_id == origin.actor_entra_id):
+            send_bot = False
         if not skip_idempotency and not self._try_consume_idempotency(idempotency_key):
             return NotificationResult(
                 event=event,
@@ -143,7 +148,8 @@ class NotificationService:
             send_activity=False,
         )
 
-    def notify_task_assigned(self, task: TaskRecord) -> NotificationResult:
+    def notify_task_assigned(self, task: TaskRecord,
+                             origin: InteractionOrigin | None = None) -> NotificationResult:
         assignee = assignee_ref(task)
         card = task_assignment_card(
             task_id=task.id,
@@ -165,6 +171,7 @@ class NotificationService:
             preview_text=preview,
             bot_text=bot_text,
             adaptive_card_dict=card_dict,
+            origin=origin,
         )
         TaskRepository(self._session).append_audit(
             task.id,
@@ -174,7 +181,8 @@ class NotificationService:
         )
         return result
 
-    def notify_verify_requested(self, task: TaskRecord, *, completion_notes: str) -> NotificationResult:
+    def notify_verify_requested(self, task: TaskRecord, *, completion_notes: str,
+                                origin: InteractionOrigin | None = None) -> NotificationResult:
         verifier = verifier_ref(task, self._settings)
         summary = "\n".join(filter(None, [completion_notes.strip(), task.description[:500]]))
         card = manager_verification_card(task_id=task.id, summary=summary or task.description[:800])
@@ -190,6 +198,7 @@ class NotificationService:
             preview_text=preview,
             bot_text=f"Please verify completion of task `{task.id}`.",
             adaptive_card_dict=card_dict,
+            origin=origin,
         )
 
     def notify_task_reopened(self, task: TaskRecord, *, reason: str) -> NotificationResult:
@@ -208,7 +217,8 @@ class NotificationService:
             adaptive_card_dict=card_dict,
         )
 
-    def notify_task_verified(self, task: TaskRecord) -> NotificationResult:
+    def notify_task_verified(self, task: TaskRecord,
+                             origin: InteractionOrigin | None = None) -> NotificationResult:
         assignee = assignee_ref(task)
         card = task_status_card(task_id=task.id, status="VERIFIED")
         card_dict = card.model_dump(by_alias=True, exclude_none=True)
@@ -223,6 +233,7 @@ class NotificationService:
             bot_text=f"Task `{task.id}` has been verified complete.",
             adaptive_card_dict=card_dict,
             send_bot=False,
+            origin=origin,
         )
 
     def notify_daily_summary(

@@ -4,20 +4,28 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel
 from microsoft_teams.ai import Function
 
 from ltm.application import DraftUseCases, TaskUseCases, UseCaseResult
-from ltm.bot.context import get_actor, push_pending_card, set_terminal_response
+from ltm.bot.context import (
+    get_actor,
+    get_conversation_id,
+    get_interaction_revision,
+    push_pending_card,
+    set_terminal_response,
+)
 from ltm.bot.d365_tools import build_d365_functions
 from ltm.policy import AssignmentPolicyError, assert_assignee_department_matches, assert_can_assign, tool_error
-from ltm.bot.drafts import stash_draft
+from ltm.bot.drafts import discard_draft, stash_draft
 from ltm.bot.commands import format_task_list_message
 from ltm.cards.builders import draft_confirm_card, task_detail_card
-from ltm.domain.enums import DeptCode, Priority
+from ltm.interaction.models import DraftCandidate, InteractionOperation
+from ltm.interaction.normalization import derive_task_title, normalize_priority, parse_due_date, refers_to_self
+from ltm.interaction.store import InteractionStore
+from ltm.policy.profiles import department_label, get_profile
 from ltm.domain.models import (
     AcknowledgeTaskParams,
     CloseTaskParams,
@@ -32,49 +40,67 @@ from ltm.domain.models import (
 )
 
 logger = logging.getLogger(__name__)
+_STALE_RESULT = '{"ok":false,"code":"STALE_INTERACTION","message":"Superseded by a newer interaction."}'
 
 
-class CreateTaskToolParams(BaseModel):
-    task_type: str = Field(min_length=1, max_length=200)
-    description: str = Field(min_length=1, max_length=8000)
-    assignee_entra_id: str = Field(min_length=1)
-    assignee_display_name: str = ""
-    assignee_department: str = ""
-    assignee_department_code: DeptCode
-    priority: Priority = Priority.MEDIUM
-    due_date: str
-    purchase_order_number: str | None = None
-    vendor_account: str | None = None
-    vendor_name: str | None = None
-    invoice_number: str | None = None
-    customer_account: str | None = None
-    project_id: str | None = None
+def _turn_superseded() -> bool:
+    revision = get_interaction_revision()
+    return (
+        revision is not None
+        and InteractionStore().enabled()
+        and not InteractionStore().is_current(
+            actor_id=get_actor().entra_object_id,
+            conversation_id=get_conversation_id(),
+            revision=revision,
+        )
+    )
 
-    @field_validator("due_date")
-    @classmethod
-    def check_iso_date(cls, v: str) -> str:
-        date.fromisoformat(v)
-        return v
 
+class CreateTaskToolParams(DraftCandidate):
+    """Transport schema for the application-owned partial draft candidate."""
 
 async def create_task_handler(params: CreateTaskToolParams) -> str:
     actor = get_actor()
-    try:
-        assert_assignee_department_matches(
-            assignee_entra_id=params.assignee_entra_id,
-            assignee_department_code=params.assignee_department_code,
+    assignee_id = params.assignee_entra_id
+    if refers_to_self(params.assignee) or refers_to_self(assignee_id):
+        assignee_id = actor.entra_object_id
+    due_date = parse_due_date(params.due_date)
+    missing = []
+    if not assignee_id:
+        missing.append("assignee")
+    if due_date is None:
+        missing.append("due date")
+    if missing:
+        revision = get_interaction_revision()
+        stored_revision = InteractionStore().set_pending(
+            actor_id=actor.entra_object_id,
+            conversation_id=get_conversation_id(),
+            operation=InteractionOperation.CREATE_TASK,
+            slots=params.model_dump(mode="json"),
+            missing_fields=missing,
+            expected_revision=revision,
         )
+        if revision is not None and stored_revision is None and InteractionStore().enabled():
+            return "A newer message superseded this request."
+        message = f"I just need {' and '.join(missing)}. Please provide them in one reply."
+        set_terminal_response(message)
+        return message
+
+    try:
+        profile = get_profile(assignee_id)
+        assert_assignee_department_matches(assignee_entra_id=assignee_id,
+                                           assignee_department_code=profile.department_code)
         assert_can_assign(
             requester_entra_id=actor.entra_object_id,
-            assignee_entra_id=params.assignee_entra_id,
+            assignee_entra_id=assignee_id,
         )
     except AssignmentPolicyError as exc:
         logger.warning(
             "Task draft denied by assignment policy: requester_entra_id=%s assignee_entra_id=%s "
             "assignee_department_code=%s error_type=%s message=%r",
             actor.entra_object_id,
-            params.assignee_entra_id,
-            params.assignee_department_code.value,
+            assignee_id,
+            "derived",
             type(exc).__name__,
             exc.user_message,
         )
@@ -90,17 +116,39 @@ async def create_task_handler(params: CreateTaskToolParams) -> str:
         project_id=params.project_id,
     )
     draft = TaskCreateDraft(
-        task_type=params.task_type,
+        task_type=derive_task_title(params.description, params.task_type),
         description=params.description,
-        assignee_entra_id=params.assignee_entra_id,
-        assignee_display_name=params.assignee_display_name,
-        assignee_department=params.assignee_department,
-        assignee_department_code=params.assignee_department_code,
-        priority=params.priority,
-        due_date=date.fromisoformat(params.due_date),
+        assignee_entra_id=assignee_id,
+        assignee_display_name=profile.display_name or params.assignee_display_name,
+        assignee_department=department_label(profile.department_code),
+        assignee_department_code=profile.department_code,
+        priority=normalize_priority(params.priority),
+        due_date=due_date,
         d365=d365,
     )
+    logger.info(
+        "draft_normalized: actor=%s assignee=%s priority=%s due=%s title_derived=%s self_assignment=%s",
+        actor.entra_object_id, assignee_id, draft.priority, draft.due_date,
+        not bool(params.task_type and params.task_type.strip()),
+        assignee_id == actor.entra_object_id,
+    )
+    interaction_store = InteractionStore()
+    revision = get_interaction_revision()
+    previous = interaction_store.get(actor_id=actor.entra_object_id,
+                                     conversation_id=get_conversation_id())
     draft_id = stash_draft(draft, actor.entra_object_id)
+    stored_revision = interaction_store.set_pending(
+        actor_id=actor.entra_object_id,
+        conversation_id=get_conversation_id(),
+        operation=InteractionOperation.REVIEW_DRAFT,
+        slots={}, missing_fields=[], reference_id=draft_id,
+        expected_revision=revision,
+    )
+    if revision is not None and stored_revision is None and interaction_store.enabled():
+        discard_draft(draft_id, actor.entra_object_id)
+        return "A newer message superseded this request."
+    if previous and previous.operation == InteractionOperation.REVIEW_DRAFT and previous.reference_id:
+        discard_draft(previous.reference_id, actor.entra_object_id)
     card = draft_confirm_card(
         draft_id=draft_id,
         task_type=draft.task_type,
@@ -183,33 +231,47 @@ def _terminal_task_lookup(result: UseCaseResult[Any]) -> str:
 
 
 async def acknowledge_task_handler(params: AcknowledgeTaskParams) -> str:
+    if _turn_superseded():
+        return _STALE_RESULT
     actor = get_actor()
     return _terminal_task_result(TaskUseCases().acknowledge(params.task_id, actor))
 
 
 async def confirm_task_draft_handler(params: DraftActionParams) -> str:
+    if _turn_superseded():
+        return _STALE_RESULT
     return _terminal_task_result(await DraftUseCases().confirm(params.draft_id, get_actor()))
 
 
 async def cancel_task_draft_handler(params: DraftActionParams) -> str:
+    if _turn_superseded():
+        return _STALE_RESULT
     return _terminal_task_result(DraftUseCases().cancel(params.draft_id, get_actor()))
 
 
 async def close_task_handler(params: CloseTaskParams) -> str:
+    if _turn_superseded():
+        return _STALE_RESULT
     actor = get_actor()
     return _terminal_task_result(await TaskUseCases().close(params, actor))
 
 
 async def reopen_task_handler(params: ReopenTaskParams) -> str:
+    if _turn_superseded():
+        return _STALE_RESULT
     actor = get_actor()
     return _terminal_task_result(await TaskUseCases().reopen(params.task_id, params.reason, actor))
 
 
 async def verify_task_handler(params: VerifyTaskParams) -> str:
+    if _turn_superseded():
+        return _STALE_RESULT
     return _terminal_task_result(await TaskUseCases().verify(params.task_id, get_actor()))
 
 
 async def resume_task_handler(params: ResumeTaskParams) -> str:
+    if _turn_superseded():
+        return _STALE_RESULT
     actor = get_actor()
     return _terminal_task_result(TaskUseCases().resume(params.task_id, actor))
 
@@ -231,11 +293,12 @@ def build_functions() -> list[Function[Any]]:
             name="create_task",
             description=(
                 "Propose a task (does not persist until user confirms the Adaptive Card). "
-                "Call immediately when task_type, description, assignee_entra_id, assignee_department_code, "
-                "due_date, and priority are known; the user may confirm by card or explicitly in chat. "
+                "Call immediately when description, assignee, and a usable due date are known. "
+                "Task type is optional and priority may be any natural wording; both are normalized by the application. "
+                "The application derives department data from the assignment directory. Confirmation is card-only. "
                 "Use enrichments.mentions.resolved in the turn JSON when present; do not ask for an ID already provided. "
                 "If enrichments.mentions.ambiguous is non-empty, wait for the host picker card or user choice before calling. "
-                "Needs assignee_entra_id, dept code FIN|PROC|PROJ|HR|IT|CEO, due_date ISO yyyy-mm-dd."
+                "Pass 'me' or 'myself' as assignee for self-assignment. Relative dates are accepted."
             ),
             parameter_schema=CreateTaskToolParams,
             handler=create_task_handler,

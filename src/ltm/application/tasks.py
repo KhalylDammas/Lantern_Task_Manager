@@ -9,7 +9,8 @@ from collections.abc import Callable
 from ltm.application.results import UseCaseResult
 from ltm.config.settings import Settings, get_settings
 from ltm.domain.models import CloseTaskParams, ListTasksParams, TaskRecord, UserRef
-from ltm.notifications.recipients import is_verifier
+from ltm.notifications.recipients import is_verifier, verifier_ref
+from ltm.interaction.models import InteractionOrigin
 from ltm.notifications.service import NotificationService
 from ltm.policy.access import can_view_task
 from ltm.storage.db import session_scope
@@ -73,7 +74,9 @@ class TaskUseCases:
             success_message=f"Resumed: {task_id}. Task is now in progress.",
         )
 
-    async def close(self, params: CloseTaskParams, actor: UserRef) -> UseCaseResult[TaskRecord]:
+    async def close(self, params: CloseTaskParams, actor: UserRef,
+                    origin: InteractionOrigin | None = None) -> UseCaseResult[TaskRecord]:
+        settings = self._settings_provider()
         with session_scope() as session:
             repo = TaskRepository(session)
             task = repo.get(params.task_id)
@@ -81,18 +84,29 @@ class TaskUseCases:
             if denial:
                 return denial
             try:
-                closed = repo.mark_pending_closure_from_assignee(params, actor.entra_object_id)
+                verifier = verifier_ref(task, settings)
+                auto_verify = (
+                    settings.self_close_auto_verification_enabled
+                    and task.created_by.entra_object_id == actor.entra_object_id
+                    and task.assigned_to.entra_object_id == actor.entra_object_id
+                    and verifier.entra_object_id == actor.entra_object_id
+                )
+                closed = (repo.close_and_verify_self(params, actor.entra_object_id) if auto_verify
+                          else repo.mark_pending_closure_from_assignee(params, actor.entra_object_id))
             except ValueError as exc:
                 return UseCaseResult.failure(code="INVALID_STATUS", message=str(exc))
 
-        result = UseCaseResult.success(
-            closed,
-            code="TASK_CLOSED",
-            message=f"Submitted {params.task_id} for verification.",
-        )
+        if auto_verify:
+            result = UseCaseResult.success(closed, code="TASK_VERIFIED_SELF",
+                                           message=f"{params.task_id} closed and verified.")
+            return await self._notify(
+                result, lambda service: service.notify_task_verified(closed, origin=origin))
+        result = UseCaseResult.success(closed, code="TASK_CLOSED",
+                                       message=f"Submitted {params.task_id} for verification.")
         return await self._notify(
             result,
-            lambda service: service.notify_verify_requested(closed, completion_notes=params.completion_notes),
+            lambda service: service.notify_verify_requested(
+                closed, completion_notes=params.completion_notes, origin=origin),
         )
 
     async def verify(self, task_id: str, actor: UserRef) -> UseCaseResult[TaskRecord]:

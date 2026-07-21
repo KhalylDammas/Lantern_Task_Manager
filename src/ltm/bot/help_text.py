@@ -4,13 +4,12 @@ from __future__ import annotations
 
 HELP_COMMANDS = (
     "**help** — show this guide",
-    "**form** — open the structured task creation card",
     "**my tasks** — list tasks assigned to you",
     "**my requests** — list tasks you created for others",
     "**/who** *name* — search Entra directory (requires Graph permissions)",
 )
 
-WELCOME_SUGGESTIONS = "**help**, **my tasks**, **my requests**, or **form**"
+WELCOME_SUGGESTIONS = "**help**, **my tasks**, **my requests**, or describe a new task"
 
 
 def help_message_text(*, graph_enabled: bool) -> str:

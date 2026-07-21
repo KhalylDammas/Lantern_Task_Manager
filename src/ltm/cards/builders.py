@@ -2,24 +2,12 @@
 
 from __future__ import annotations
 
+import secrets
+
 from microsoft_teams.cards import AdaptiveCard
 
 from ltm.bot.help_text import welcome_card_body_text, welcome_card_suggestions_text
 from ltm.bot.mentions import MentionResolution, department_code
-from ltm.domain.enums import Priority
-
-PRIORITY_CHOICES = [
-    {"title": priority.value, "value": priority.value}
-    for priority in (Priority.CRITICAL, Priority.HIGH, Priority.MEDIUM, Priority.LOW)
-]
-
-ASSIGNEE_DEPT_CHOICES = [
-    {"title": "FIN", "value": "FIN"},
-    {"title": "PROC", "value": "PROC"},
-    {"title": "PROJ", "value": "PROJ"},
-    {"title": "HR", "value": "HR"},
-    {"title": "IT", "value": "IT"},
-]
 
 
 def _candidate_label(candidate: MentionResolution) -> str:
@@ -47,6 +35,7 @@ def draft_confirm_payload(
     assignee_mail: str | None = None,
     assignee_job_title: str | None = None,
 ) -> dict:
+    action_token = secrets.token_hex(12)
     facts = [
         {"title": "Draft reference", "value": draft_id},
         {"title": "Type", "value": task_type},
@@ -82,13 +71,13 @@ def draft_confirm_payload(
                 "type": "Action.Execute",
                 "title": "Confirm",
                 "verb": "draft.confirm",
-                "data": {"draft_id": draft_id},
+                "data": {"draft_id": draft_id, "action_token": action_token},
             },
             {
                 "type": "Action.Execute",
                 "title": "Cancel",
                 "verb": "draft.cancel",
-                "data": {"draft_id": draft_id},
+                "data": {"draft_id": draft_id, "action_token": action_token},
             },
         ],
     }
@@ -106,13 +95,7 @@ def assignee_disambiguation_card(
     candidates: tuple[MentionResolution, ...],
     source: str = "message",
 ) -> AdaptiveCard:
-    choices = [
-        {
-            "title": _candidate_label(candidate),
-            "value": candidate.user.entra_object_id,
-        }
-        for candidate in candidates
-    ]
+    action_token = secrets.token_hex(12)
     payload: dict = {
         "type": "AdaptiveCard",
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
@@ -124,79 +107,21 @@ def assignee_disambiguation_card(
                 "text": f"Multiple directory matches for {token} ({query}). Pick the correct person.",
                 "wrap": True,
             },
-            {
-                "type": "Input.ChoiceSet",
-                "id": "assignee_entra_id",
-                "label": "Assignee",
-                "isRequired": True,
-                "choices": choices,
-            },
         ],
-        "actions": [
-            {
-                "type": "Action.Execute",
-                "title": "Continue",
-                "verb": "pick_assignee",
-                "data": {"pick_id": pick_id, "token": token, "source": source},
-            }
-        ],
+        "actions": [{
+            "type": "Action.Execute",
+            "title": _candidate_label(candidate),
+            "verb": "pick_assignee",
+            "data": {"pick_id": pick_id, "token": token, "source": source,
+                     "assignee_entra_id": candidate.user.entra_object_id,
+                     "action_token": action_token},
+        } for candidate in candidates],
     }
     return AdaptiveCard.model_validate(payload)
 
 
-def manual_task_form_card() -> AdaptiveCard:
-    """Structured capture when NL/LLM path is unavailable (FR-AI-04)."""
-    d: dict = {
-        "type": "AdaptiveCard",
-        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-        "version": "1.5",
-        "body": [
-            {"type": "TextBlock", "text": "Create task (manual)", "weight": "Bolder"},
-            {
-                "type": "TextBlock",
-                "text": "Submit to review a confirmation card before the task is created.",
-                "isSubtle": True,
-                "wrap": True,
-            },
-            {"type": "Input.Text", "id": "task_type", "label": "Task type", "isRequired": True},
-            {"type": "Input.Text", "id": "description", "label": "Description", "isMultiline": True, "isRequired": True},
-            {
-                "type": "Input.Text",
-                "id": "assignee_name",
-                "label": "Assignee name",
-                "placeholder": "e.g. Alice Jones",
-                "isRequired": True,
-            },
-            {
-                "type": "Input.ChoiceSet",
-                "id": "assignee_department_code",
-                "label": "Assignee dept code",
-                "style": "compact",
-                "isRequired": True,
-                "choices": ASSIGNEE_DEPT_CHOICES,
-            },
-            {
-                "type": "Input.ChoiceSet",
-                "id": "priority",
-                "label": "Priority",
-                "value": Priority.MEDIUM.value,
-                "choices": PRIORITY_CHOICES,
-            },
-            {"type": "Input.Date", "id": "due_date", "label": "Due date"},
-        ],
-        "actions": [
-            {
-                "type": "Action.Execute",
-                "title": "Submit",
-                "verb": "manual_create_submit",
-                "data": {},
-            }
-        ],
-    }
-    return AdaptiveCard.model_validate(d)
-
-
 def manager_verification_card(*, task_id: str, summary: str) -> AdaptiveCard:
+    action_token = secrets.token_hex(12)
     d = {
         "type": "AdaptiveCard",
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
@@ -205,20 +130,19 @@ def manager_verification_card(*, task_id: str, summary: str) -> AdaptiveCard:
             {"type": "TextBlock", "text": "Verify task completion", "weight": "Bolder"},
             {"type": "TextBlock", "text": f"Task {task_id}", "weight": "Bolder", "wrap": True},
             {"type": "TextBlock", "text": summary[:800], "wrap": True},
-            {"type": "Input.Text", "id": "rejection_reason", "label": "Reject reason (required if rejecting)", "isMultiline": True},
         ],
         "actions": [
             {
                 "type": "Action.Execute",
                 "title": "Confirm complete",
                 "verb": "task.verify",
-                "data": {"task_id": task_id},
+                "data": {"task_id": task_id, "action_token": action_token},
             },
             {
                 "type": "Action.Execute",
-                "title": "Reject",
+                "title": "Reopen",
                 "verb": "task.reject",
-                "data": {"task_id": task_id},
+                "data": {"task_id": task_id, "action_token": action_token},
             },
         ],
     }
@@ -274,6 +198,7 @@ def task_assignment_card(
     priority: str,
     created_by_name: str,
 ) -> AdaptiveCard:
+    action_token = secrets.token_hex(12)
     d = {
         "type": "AdaptiveCard",
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
@@ -294,31 +219,25 @@ def task_assignment_card(
                 "text": description[:500] + ("…" if len(description) > 500 else ""),
                 "wrap": True,
             },
-            {
-                "type": "Input.Text",
-                "id": "completion_notes",
-                "label": "Completion notes (required when closing)",
-                "isMultiline": True,
-            },
         ],
         "actions": [
             {
                 "type": "Action.Execute",
                 "title": "Acknowledge",
                 "verb": "task.acknowledge",
-                "data": {"task_id": task_id},
+                "data": {"task_id": task_id, "action_token": action_token},
             },
             {
                 "type": "Action.Execute",
                 "title": "View details",
                 "verb": "task.view",
-                "data": {"task_id": task_id},
+                "data": {"task_id": task_id, "action_token": action_token},
             },
             {
                 "type": "Action.Execute",
                 "title": "Close task",
                 "verb": "task.close",
-                "data": {"task_id": task_id},
+                "data": {"task_id": task_id, "action_token": action_token},
             },
         ],
     }
@@ -326,6 +245,7 @@ def task_assignment_card(
 
 
 def task_reopened_card(*, task_id: str, reason: str) -> AdaptiveCard:
+    action_token = secrets.token_hex(12)
     d = {
         "type": "AdaptiveCard",
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
@@ -334,31 +254,25 @@ def task_reopened_card(*, task_id: str, reason: str) -> AdaptiveCard:
             {"type": "TextBlock", "text": "Task reopened", "weight": "Bolder"},
             {"type": "TextBlock", "text": f"Task {task_id} needs more work.", "weight": "Bolder", "wrap": True},
             {"type": "TextBlock", "text": reason[:800], "wrap": True},
-            {
-                "type": "Input.Text",
-                "id": "completion_notes",
-                "label": "Completion notes (required when closing)",
-                "isMultiline": True,
-            },
         ],
         "actions": [
             {
                 "type": "Action.Execute",
                 "title": "Resume work",
                 "verb": "task.resume",
-                "data": {"task_id": task_id},
+                "data": {"task_id": task_id, "action_token": action_token},
             },
             {
                 "type": "Action.Execute",
                 "title": "View task",
                 "verb": "task.view",
-                "data": {"task_id": task_id},
+                "data": {"task_id": task_id, "action_token": action_token},
             },
             {
                 "type": "Action.Execute",
                 "title": "Close task",
                 "verb": "task.close",
-                "data": {"task_id": task_id},
+                "data": {"task_id": task_id, "action_token": action_token},
             },
         ],
     }
@@ -407,6 +321,7 @@ def welcome_card() -> AdaptiveCard:
 
 
 def overdue_escalation_card(*, task_id: str, assignee_name: str, days_overdue: int) -> AdaptiveCard:
+    action_token = secrets.token_hex(12)
     d = {
         "type": "AdaptiveCard",
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
@@ -425,7 +340,7 @@ def overdue_escalation_card(*, task_id: str, assignee_name: str, days_overdue: i
                 "type": "Action.Execute",
                 "title": "View task",
                 "verb": "task.view",
-                "data": {"task_id": task_id},
+                "data": {"task_id": task_id, "action_token": action_token},
             },
         ],
     }

@@ -89,6 +89,9 @@ deploy:
         NOTIFICATION_ACTIVITY_ENABLED: "true"
         NOTIFICATION_BOT_DM_ENABLED: "true"
         LTM_VERIFIER_MODE: "created_by"
+        LTM_INTERACTION_COORDINATOR_ENABLED: "true"
+        LTM_SELF_CLOSE_AUTO_VERIFY_ENABLED: "true"
+        LTM_SELF_NOTIFICATION_ACTIVITY_ONLY_ENABLED: "true"
         LTM_CRON_SECRET: ${{SECRET_LTM_CRON_SECRET}}
         D365_ENVIRONMENT_URL: "https://lss-prod.operations.uae.dynamics.com"
         D365_CLIENT_ID: "fddfdd2c-9747-43bb-9895-58185732923d"

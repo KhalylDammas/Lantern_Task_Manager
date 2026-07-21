@@ -69,6 +69,37 @@ class IdempotencyRecord(Base):
     payload: Mapped[str] = mapped_column(Text, default="{}")
 
 
+class InteractionSessionORM(Base):
+    __tablename__ = "ltm_interaction_sessions"
+    __table_args__ = (UniqueConstraint("actor_entra_id", "conversation_id", name="uq_interaction_actor_conversation"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    actor_entra_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    conversation_id: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    active_operation: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    slots: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    missing_fields: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    reference_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    source_activity_id: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class TaskDraftORM(Base):
+    __tablename__ = "ltm_task_drafts"
+
+    draft_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    requester_entra_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default="ACTIVE")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
 class ConversationBinding(Base):
     """Persist Bot Framework ConversationReference keyed by user's Entra object id (C03)."""
 

@@ -78,7 +78,7 @@ async def test_unknown_card_action_is_not_consumed() -> None:
     assert not dispatched.handled
 
 
-def test_completion_notes_input_is_on_assignment_not_draft_card() -> None:
+def test_cards_do_not_collect_completion_notes_manually() -> None:
     draft = draft_confirm_payload(
         draft_id="draft-1",
         task_type="Review",
@@ -97,4 +97,4 @@ def test_completion_notes_input_is_on_assignment_not_draft_card() -> None:
     ).model_dump(by_alias=True, exclude_none=True)
 
     assert not any(item.get("id") == "completion_notes" for item in draft["body"])
-    assert any(item.get("id") == "completion_notes" for item in assignment["body"])
+    assert not any(item.get("id") == "completion_notes" for item in assignment["body"])
