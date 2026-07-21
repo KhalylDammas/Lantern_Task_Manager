@@ -81,7 +81,7 @@ Verify with `python scripts/verify_graph_access.py` or `GET /health` on the runn
 
 Authorization reads `src/config/assignment_directory.json`, built from **`src/config/assignment_directory.csv`**.
 
-1. Edit the CSV: `include=Y`, `department_code` (`FIN|PROC|OP|HR|IT|BD|SAL|EXO|CEO`), optional `manager_entra_id`. Entra `department` is empty for most users — set `department_code` manually. Users in `CEO` may assign to anyone whose `manager_entra_id` is their Entra id (see `assignment_policy.json`).
+1. Edit the CSV: `include=Y`, `department_code` (`FIN|PROC|OP|HR|IT|BD|SAL|EXO|TBS|CBS|QUA|CEO`), optional `manager_entra_id`. Entra `department` is empty for most users — set `department_code` manually. Users in `CEO` may assign to anyone whose `manager_entra_id` is their Entra id (see `assignment_policy.json`).
 2. With `az login`, refresh Graph fields and rebuild:
 
 ```bash
