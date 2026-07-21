@@ -11,6 +11,8 @@ class DeptCode(StrEnum):
     OP = "OP"
     HR = "HR"
     IT = "IT"
+    BD = "BD"
+    SAL = "SAL"
     CEO = "CEO"
 
 
@@ -20,6 +22,8 @@ DEPT_DISPLAY = {
     DeptCode.OP: "Operation",
     DeptCode.HR: "HR",
     DeptCode.IT: "IT",
+    DeptCode.BD: "Business Development",
+    DeptCode.SAL: "Sales",
     DeptCode.CEO: "Executive",
 }
 

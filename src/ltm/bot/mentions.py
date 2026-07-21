@@ -126,6 +126,10 @@ def _department_code(department: str) -> str:
         return DeptCode.PROC.value
     if normalized in {"finance", "fin"}:
         return DeptCode.FIN.value
+    if normalized in {"business development", "bizdev", "bd"}:
+        return DeptCode.BD.value
+    if normalized in {"sales", "sal"}:
+        return DeptCode.SAL.value
     return ""
 
 

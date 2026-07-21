@@ -19,7 +19,7 @@ from ltm.bot.mentions import (
 )
 from ltm.domain.models import UserRef
 
-TASK_ID_RE = re.compile(r"LTM-(?:FIN|PROC|OP|PROJ|HR|IT|CEO)-\d{4}-\d{4}", re.IGNORECASE)
+TASK_ID_RE = re.compile(r"LTM-(?:FIN|PROC|OP|PROJ|HR|IT|BD|SAL|CEO)-\d{4}-\d{4}", re.IGNORECASE)
 ToolProfile = Literal["full", "groq_chat"]
 
 

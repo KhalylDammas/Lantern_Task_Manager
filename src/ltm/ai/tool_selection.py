@@ -7,7 +7,7 @@ from typing import Any
 
 from microsoft_teams.ai import Function
 
-_TASK_ID = re.compile(r"\bLTM-(?:FIN|PROC|OP|PROJ|HR|IT|CEO)-\d{4}-\d{4}\b", re.I)
+_TASK_ID = re.compile(r"\bLTM-(?:FIN|PROC|OP|PROJ|HR|IT|BD|SAL|CEO)-\d{4}-\d{4}\b", re.I)
 _TASK_RULES: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = (
     (re.compile(r"\b(?:acknowledge|accept)\b", re.I), frozenset({"acknowledge_task"})),
     (re.compile(r"\b(?:close|complete|completed|done)\b", re.I), frozenset({"close_task"})),

@@ -72,6 +72,18 @@
       "department_code": "OP",
       "active": true,
       "manager_entra_id": "d5b03abf-9013-49af-b7ee-890567cc792d"
+    },
+    "71708329-1fe0-4464-98d6-ee609ebe3dc2": {
+      "display_name": "Jameel S.",
+      "department_code": "BD",
+      "active": true,
+      "manager_entra_id": "d5b03abf-9013-49af-b7ee-890567cc792d"
+    },
+    "3e67f76c-ac08-44cb-a0a5-ca274a11e086": {
+      "display_name": "Mohammed Abdulhaq",
+      "department_code": "SAL",
+      "active": true,
+      "manager_entra_id": "d5b03abf-9013-49af-b7ee-890567cc792d"
     }
   }
 }
