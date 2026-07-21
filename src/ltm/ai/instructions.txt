@@ -31,7 +31,7 @@ Routing:
 - Resume reopened work: `resume_task`.
 
 States: ASSIGNED → IN_PROGRESS → PENDING_VERIFICATION → VERIFIED; verification
-may instead produce REOPENED → IN_PROGRESS. Departments: FIN, PROC, PROJ, HR, IT,
+may instead produce REOPENED → IN_PROGRESS. Departments: FIN, PROC, OP, HR, IT,
 CEO. Priorities: Critical, High, Medium, Low.
 
 Keep replies concise and action-oriented. If assignment fails or the user prefers

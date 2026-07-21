@@ -8,7 +8,7 @@ from enum import StrEnum
 class DeptCode(StrEnum):
     FIN = "FIN"
     PROC = "PROC"
-    PROJ = "PROJ"
+    OP = "OP"
     HR = "HR"
     IT = "IT"
     CEO = "CEO"
@@ -17,7 +17,7 @@ class DeptCode(StrEnum):
 DEPT_DISPLAY = {
     DeptCode.FIN: "Finance",
     DeptCode.PROC: "Procurement",
-    DeptCode.PROJ: "Projects",
+    DeptCode.OP: "Operation",
     DeptCode.HR: "HR",
     DeptCode.IT: "IT",
     DeptCode.CEO: "Executive",
