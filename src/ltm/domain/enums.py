@@ -13,6 +13,7 @@ class DeptCode(StrEnum):
     IT = "IT"
     BD = "BD"
     SAL = "SAL"
+    EXO = "EXO"
     CEO = "CEO"
 
 
@@ -24,6 +25,7 @@ DEPT_DISPLAY = {
     DeptCode.IT: "IT",
     DeptCode.BD: "Business Development",
     DeptCode.SAL: "Sales",
+    DeptCode.EXO: "Executive Office",
     DeptCode.CEO: "Executive",
 }
 

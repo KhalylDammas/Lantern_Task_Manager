@@ -84,6 +84,30 @@
       "department_code": "SAL",
       "active": true,
       "manager_entra_id": "d5b03abf-9013-49af-b7ee-890567cc792d"
+    },
+    "30595e58-6f61-48f9-8ff7-56c1ff06639a": {
+      "display_name": "Adnan Iqbal",
+      "department_code": "EXO",
+      "active": true,
+      "manager_entra_id": "d5b03abf-9013-49af-b7ee-890567cc792d"
+    },
+    "bf21a5a7-a7f7-4afa-9a3b-a89a0faeff27": {
+      "display_name": "Leo Zabat",
+      "department_code": "EXO",
+      "active": true,
+      "manager_entra_id": "d5b03abf-9013-49af-b7ee-890567cc792d"
+    },
+    "4013d3ea-7666-4f0b-8c92-e3fcaffd8c41": {
+      "display_name": "Ishan Rashid",
+      "department_code": "EXO",
+      "active": true,
+      "manager_entra_id": "d5b03abf-9013-49af-b7ee-890567cc792d"
+    },
+    "4120d32d-4ce5-4b57-a27c-8240147dd0d7": {
+      "display_name": "Roderick Valera",
+      "department_code": "EXO",
+      "active": true,
+      "manager_entra_id": "d5b03abf-9013-49af-b7ee-890567cc792d"
     }
   }
 }
