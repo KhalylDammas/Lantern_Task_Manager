@@ -244,6 +244,41 @@ def task_assignment_card(
     return AdaptiveCard.model_validate(d)
 
 
+def task_created_card(
+    *,
+    task_id: str,
+    task_type: str,
+    description: str,
+    due: str,
+    priority: str,
+    assignee_name: str,
+) -> AdaptiveCard:
+    """Read-only confirmation shown to the requester after creating a task."""
+    d = {
+        "type": "AdaptiveCard",
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "version": "1.5",
+        "body": [
+            {"type": "TextBlock", "text": "Task created", "weight": "Bolder", "size": "Medium"},
+            {"type": "TextBlock", "text": f"{task_id} — {task_type}", "weight": "Bolder", "wrap": True},
+            {
+                "type": "FactSet",
+                "facts": [
+                    {"title": "Assigned to", "value": assignee_name},
+                    {"title": "Due", "value": due},
+                    {"title": "Priority", "value": priority},
+                ],
+            },
+            {
+                "type": "TextBlock",
+                "text": description[:500] + ("…" if len(description) > 500 else ""),
+                "wrap": True,
+            },
+        ],
+    }
+    return AdaptiveCard.model_validate(d)
+
+
 def task_reopened_card(*, task_id: str, reason: str) -> AdaptiveCard:
     action_token = secrets.token_hex(12)
     d = {

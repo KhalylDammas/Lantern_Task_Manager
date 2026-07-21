@@ -5,7 +5,7 @@ from datetime import date, timedelta
 import pytest
 
 from ltm.bot.card_actions import dispatch_card_action
-from ltm.cards.builders import draft_confirm_payload, task_assignment_card
+from ltm.cards.builders import draft_confirm_payload, task_assignment_card, task_created_card
 from ltm.domain.enums import DeptCode, Priority, TaskStatus
 from ltm.domain.models import TaskCreateDraft, UserRef
 from ltm.storage.db import session_scope
@@ -98,3 +98,36 @@ def test_cards_do_not_collect_completion_notes_manually() -> None:
 
     assert not any(item.get("id") == "completion_notes" for item in draft["body"])
     assert not any(item.get("id") == "completion_notes" for item in assignment["body"])
+
+
+def test_task_created_card_is_read_only_and_identifies_assignee() -> None:
+    card = task_created_card(
+        task_id="LTM-IT-2026-0001",
+        task_type="Review",
+        description="Review task",
+        due="2026-07-21",
+        priority="Medium",
+        assignee_name="Employee Name",
+    ).model_dump(by_alias=True, exclude_none=True)
+
+    assert "actions" not in card
+    assert card["body"][0]["text"] == "Task created"
+    facts = card["body"][2]["facts"]
+    assert {"title": "Assigned to", "value": "Employee Name"} in facts
+
+
+def test_task_assignment_card_keeps_assignee_actions() -> None:
+    card = task_assignment_card(
+        task_id="LTM-IT-2026-0001",
+        task_type="Review",
+        description="Review task",
+        due="2026-07-21",
+        priority="Medium",
+        created_by_name="Creator",
+    ).model_dump(by_alias=True, exclude_none=True)
+
+    assert {action["verb"] for action in card["actions"]} == {
+        "task.acknowledge",
+        "task.view",
+        "task.close",
+    }
