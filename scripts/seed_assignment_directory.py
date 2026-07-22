@@ -26,7 +26,7 @@ CSV_PATH = CONFIG_DIR / "assignment_directory.csv"
 JSON_PATH = CONFIG_DIR / "assignment_directory.json"
 CANDIDATES_PATH = CONFIG_DIR / "assignment_directory.candidates.csv"
 
-VALID_DEPT = frozenset({"FIN", "PROC", "OP", "HR", "IT", "CEO"})
+VALID_DEPT = frozenset({"FIN", "PROC", "OP", "HR", "IT", "BD", "SAL", "EXO", "TBS", "CBS", "QUA", "CEO"})
 
 DEPT_FROM_GRAPH = {
     "finance": "FIN",
@@ -39,6 +39,22 @@ DEPT_FROM_GRAPH = {
     "human resources": "HR",
     "it": "IT",
     "it & systems": "IT",
+    "business development": "BD",
+    "bizdev": "BD",
+    "bd": "BD",
+    "sales": "SAL",
+    "sal": "SAL",
+    "executive office": "EXO",
+    "ceo office": "EXO",
+    "exo": "EXO",
+    "technical bidding & solutions": "TBS",
+    "technical bidding and solutions": "TBS",
+    "tbs": "TBS",
+    "commercial bidding & solutions": "CBS",
+    "commercial bidding and solutions": "CBS",
+    "cbs": "CBS",
+    "quality": "QUA",
+    "qua": "QUA",
 }
 
 
