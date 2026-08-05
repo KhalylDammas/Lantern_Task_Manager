@@ -49,6 +49,36 @@
       "active": true,
       "manager_entra_id": "e5e8ca79-f97b-4487-b3a7-49068a62ee18"
     },
+    "85b9da04-dd8b-472e-9e2b-d1abb2f0318b": {
+      "display_name": "Arslan Zafar Ali",
+      "department_code": "PROC",
+      "active": true,
+      "manager_entra_id": "e5e8ca79-f97b-4487-b3a7-49068a62ee18"
+    },
+    "e5c3dfb8-5cdb-4cd3-9750-2b4e2ce79d49": {
+      "display_name": "Muddassar Habib",
+      "department_code": "PROC",
+      "active": true,
+      "manager_entra_id": "e5e8ca79-f97b-4487-b3a7-49068a62ee18"
+    },
+    "d9a7d904-03dd-45f3-8ecb-0a2002f7bdf0": {
+      "display_name": "Norah Fahad",
+      "department_code": "PROC",
+      "active": true,
+      "manager_entra_id": "e5e8ca79-f97b-4487-b3a7-49068a62ee18"
+    },
+    "99b2c7ab-8476-430e-8c51-b1eed3c14609": {
+      "display_name": "Daniya Mohammed ALsuwayi",
+      "department_code": "PROC",
+      "active": true,
+      "manager_entra_id": "e5e8ca79-f97b-4487-b3a7-49068a62ee18"
+    },
+    "7227f008-a375-4d79-a0cf-1fcc8a2e764d": {
+      "display_name": "Faisal Abdulrahman Alshehri",
+      "department_code": "PROC",
+      "active": true,
+      "manager_entra_id": "e5e8ca79-f97b-4487-b3a7-49068a62ee18"
+    },
     "40c37df1-8c87-4bb5-ba8a-da4ba3689fb3": {
       "display_name": "Abdulrazak Mohamed Ali",
       "department_code": "IT",
@@ -78,6 +108,12 @@
       "department_code": "BD",
       "active": true,
       "manager_entra_id": "d5b03abf-9013-49af-b7ee-890567cc792d"
+    },
+    "b56dd508-2d53-4a59-98f2-22e1c36afee2": {
+      "display_name": "Farah Marwan Shujaa",
+      "department_code": "BD",
+      "active": true,
+      "manager_entra_id": "71708329-1fe0-4464-98d6-ee609ebe3dc2"
     },
     "3e67f76c-ac08-44cb-a0a5-ca274a11e086": {
       "display_name": "Mohammed Abdulhaq",
